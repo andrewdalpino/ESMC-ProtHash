@@ -49,15 +49,16 @@ def main():
     parser.add_argument("--min_sequence_length", default=1, type=int)
     parser.add_argument("--max_sequence_length", default=2048, type=int)
     parser.add_argument("--quantization_aware_training", action="store_true")
+    parser.add_argument("--quant_group_size", default=64, type=int)
     parser.add_argument("--learning_rate", default=1e-4, type=float)
     parser.add_argument("--max_gradient_norm", default=100.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
     parser.add_argument("--max_steps", default=10000, type=int)
-    parser.add_argument("--stage_1_loss_weight", default=1.0, type=float)
-    parser.add_argument("--stage_2_loss_weight", default=1.5, type=float)
-    parser.add_argument("--stage_3_loss_weight", default=2.0, type=float)
-    parser.add_argument("--stage_4_loss_weight", default=2.5, type=float)
+    parser.add_argument("--stage_1_loss_weight", default=0.25, type=float)
+    parser.add_argument("--stage_2_loss_weight", default=0.5, type=float)
+    parser.add_argument("--stage_3_loss_weight", default=0.75, type=float)
+    parser.add_argument("--stage_4_loss_weight", default=1.0, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=16, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
@@ -189,7 +190,7 @@ def main():
     student = ProtHash(**model_args)
 
     if args.quantization_aware_training:
-        student.add_fake_quantized_tensors()
+        student.add_fake_quantized_tensors(args.quant_group_size)
 
     student = student.to(args.device)
 
@@ -242,6 +243,7 @@ def main():
 
     total_stage1_l2_loss, total_stage2_l2_loss = 0.0, 0.0
     total_stage3_l2_loss, total_stage4_l2_loss = 0.0, 0.0
+
     num_batches = 0
 
     print("Distilling ...")
@@ -258,6 +260,10 @@ def main():
             y1_student, y2_student, y3_student, y4_student = (
                 student.forward_with_adapters(x)
             )
+
+            assert (
+                out_teacher.hidden_states is not None
+            ), "Teacher model must return hidden states."
 
             y1_teacher = out_teacher.hidden_states[anchor_points[0]]
             y2_teacher = out_teacher.hidden_states[anchor_points[1]]
@@ -332,6 +338,10 @@ def main():
 
                     with torch.inference_mode():
                         out_teacher = teacher.forward(x)
+
+                    assert (
+                        out_teacher.hidden_states is not None
+                    ), "Teacher model must return hidden states."
 
                     y1_teacher = out_teacher.hidden_states[anchor_points[0]]
                     y2_teacher = out_teacher.hidden_states[anchor_points[1]]
