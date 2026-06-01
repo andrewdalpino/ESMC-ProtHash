@@ -14,7 +14,11 @@ A protein language model that outputs amino acid sequence embeddings for use in 
 
 - **Quantization-ready**: With quantization-aware post-training, ProtHash allows you to quantize the weights of the model while maintaining its near-perfect similarity to the teacher's embedding space.
 
-## Pretrained Models
+## Prtrained Models
+
+Coming soon ...
+
+## Legacy Pretrained Models
 
 | Name | Context Length | Embedding Dimensions | Attention Heads (Q/KV) | Encoder Layers | Total Params | Teacher Model | Teacher Dimensions | Library Version |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
