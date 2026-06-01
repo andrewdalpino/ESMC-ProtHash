@@ -1,0 +1,432 @@
+import random
+
+from argparse import ArgumentParser
+from functools import partial
+
+import torch
+
+from torch.optim import AdamW, SGD
+from torch.utils.data import DataLoader, random_split
+from torch.cuda import is_available as cuda_is_available, is_bf16_supported
+from torch.backends.mps import is_available as mps_is_available
+from torch.amp import autocast
+from torch.nn.utils import clip_grad_norm_
+from torch.nn import MSELoss
+from torch.nn.functional import cosine_similarity
+
+from torch.utils.tensorboard import SummaryWriter
+
+from esm.tokenization import EsmSequenceTokenizer
+from esm.models.esmc import ESMC
+
+from src.prothash.model import ProtHash
+from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
+from loss import AdaptiveStageWeighting
+
+from tqdm import tqdm
+
+AVAILABLE_TEACHERS = {"esmc_300m", "esmc_600m"}
+
+TEACHER_LAYER_ANCHOR_POINTS = {
+    "esmc_300m": (7, 14, 21, 29),
+    "esmc_600m": (8, 17, 26, 35),
+}
+
+
+def main():
+    parser = ArgumentParser(
+        description="Distill a larger ESMC model into a smaller one."
+    )
+
+    parser.add_argument(
+        "--teacher_name", choices=AVAILABLE_TEACHERS, default="esmc_300m"
+    )
+
+    parser.add_argument("--dataset_path", default="dataset/uniref50.fasta", type=str)
+    parser.add_argument("--num_length_buckets", default=100, type=int)
+    parser.add_argument("--num_dataset_processes", default=4, type=int)
+    parser.add_argument("--min_sequence_length", default=1, type=int)
+    parser.add_argument("--max_sequence_length", default=2048, type=int)
+    parser.add_argument("--quantization_aware_training", action="store_true")
+    parser.add_argument("--learning_rate", default=1e-4, type=float)
+    parser.add_argument("--stage_learning_rate", default=1e-3, type=float)
+    parser.add_argument("--max_gradient_norm", default=100.0, type=float)
+    parser.add_argument("--batch_size", default=16, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
+    parser.add_argument("--max_steps", default=10000, type=int)
+    parser.add_argument("--embedding_dimensions", default=512, type=int)
+    parser.add_argument("--num_attention_heads", default=16, type=int)
+    parser.add_argument("--hidden_ratio", default=4, type=int)
+    parser.add_argument("--num_encoder_layers", default=10, type=int)
+    parser.add_argument("--eval_interval", default=100, type=int)
+    parser.add_argument("--num_eval_samples", default=5000, type=int)
+    parser.add_argument("--checkpoint_interval", default=100, type=int)
+
+    parser.add_argument(
+        "--checkpoint_path", default="./checkpoints/checkpoint.pt", type=str
+    )
+
+    parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--run_dir_path", default="./runs", type=str)
+    parser.add_argument("--device", default="cpu", type=str)
+    parser.add_argument("--seed", default=None, type=int)
+
+    args = parser.parse_args()
+
+    if args.max_sequence_length > 2048:
+        raise ValueError(
+            f"Maximum sequence length cannot exceed 2048, {args.max_sequence_length} given."
+        )
+
+    if args.batch_size < 1:
+        raise ValueError(f"Batch size must be greater than 0, {args.batch_size} given.")
+
+    if args.learning_rate < 0:
+        raise ValueError(
+            f"Learning rate must be a positive value, {args.learning_rate} given."
+        )
+
+    if args.max_steps < 1:
+        raise ValueError(f"Must train for at least 1 step, {args.max_steps} given.")
+
+    if args.eval_interval < 1:
+        raise ValueError(
+            f"Eval interval must be greater than 0, {args.eval_interval} given."
+        )
+
+    if args.checkpoint_interval < 1:
+        raise ValueError(
+            f"Checkpoint interval must be greater than 0, {args.checkpoint_interval} given."
+        )
+
+    if "cuda" in args.device and not cuda_is_available():
+        raise RuntimeError("Cuda is not available.")
+
+    if "mps" in args.device and not mps_is_available():
+        raise RuntimeError("MPS is not available.")
+
+    torch.set_float32_matmul_precision("high")
+
+    dtype = (
+        torch.bfloat16
+        if "cuda" in args.device and is_bf16_supported()
+        else torch.float32
+    )
+
+    amp_context = autocast(device_type=args.device, dtype=dtype)
+
+    if args.seed is not None:
+        torch.manual_seed(args.seed)
+        random.seed(args.seed)
+
+    logger = SummaryWriter(args.run_dir_path)
+
+    tokenizer = EsmSequenceTokenizer()
+
+    dataset = UniRef50(
+        path=args.dataset_path,
+        tokenizer=tokenizer,
+        min_sequence_length=args.min_sequence_length,
+        max_sequence_length=args.max_sequence_length,
+    )
+
+    num_training_samples = len(dataset) - args.num_eval_samples
+
+    training, testing = random_split(
+        dataset, (num_training_samples, args.num_eval_samples)
+    )
+
+    new_dataloader = partial(
+        DataLoader,
+        collate_fn=dataset.collate_pad_right,
+        pin_memory="cuda" in args.device,
+        num_workers=args.num_dataset_processes,
+    )
+
+    bucket_sampler = LengthBucketBatchSampler(
+        training, args.batch_size, args.num_length_buckets
+    )
+
+    train_loader = new_dataloader(training, batch_sampler=bucket_sampler)
+
+    sorted_length_sampler = SortedLengthBatchSampler(testing, args.batch_size)
+
+    test_loader = new_dataloader(testing, batch_sampler=sorted_length_sampler)
+
+    teacher = ESMC.from_pretrained(args.teacher_name)
+
+    # Freeze teacher model parameters.
+    for module in teacher.modules():
+        for param in module.parameters():
+            param.requires_grad = False
+
+    teacher = teacher.to(args.device)
+
+    teacher.eval()
+
+    anchor_points = TEACHER_LAYER_ANCHOR_POINTS[args.teacher_name]
+
+    print("Teacher model loaded successfully")
+
+    model_args = {
+        "vocabulary_size": tokenizer.vocab_size,
+        "padding_index": tokenizer.pad_token_id,
+        "context_length": args.max_sequence_length,
+        "teacher_dimensions": teacher.embed.embedding_dim,
+        "embedding_dimensions": args.embedding_dimensions,
+        "num_attention_heads": args.num_attention_heads,
+        "hidden_ratio": args.hidden_ratio,
+        "num_encoder_layers": args.num_encoder_layers,
+    }
+
+    student = ProtHash(**model_args)
+
+    if args.quantization_aware_training:
+        student.add_fake_quantized_tensors()
+
+    student = student.to(args.device)
+
+    print(f"Number of parameters: {student.num_params:,}")
+
+    l2_loss_function = MSELoss()
+
+    stage_weight = AdaptiveStageWeighting(4, 0.1).to(args.device)
+
+    optimizer = AdamW(student.parameters(), lr=args.learning_rate)
+
+    stage_optimizer = SGD(stage_weight.parameters(), lr=args.stage_learning_rate)
+
+    step = 1
+
+    if args.resume:
+        checkpoint = torch.load(
+            args.checkpoint_path, map_location=args.device, weights_only=False
+        )
+
+        student.load_state_dict(checkpoint["model"])
+        optimizer.load_state_dict(checkpoint["optimizer"])
+
+        stage_weight.load_state_dict(checkpoint["stage_weight"])
+        stage_optimizer.load_state_dict(checkpoint["stage_optimizer"])
+
+        step += checkpoint["step"]
+
+        print("Previous checkpoint resumed successfully")
+
+    student.train()
+
+    new_progress_bar = partial(
+        tqdm,
+        total=args.gradient_accumulation_steps,
+        leave=False,
+    )
+
+    total_stage1_l2_loss, total_stage2_l2_loss = 0.0, 0.0
+    total_stage3_l2_loss, total_stage4_l2_loss = 0.0, 0.0
+    num_batches = 0
+
+    print("Distilling ...")
+
+    progress_bar = new_progress_bar(desc=f"Step {step:,}")
+
+    for index, x in enumerate(train_loader, start=1):
+        x = x.to(args.device, non_blocking=True)
+
+        with amp_context:
+            with torch.no_grad():
+                out_teacher = teacher.forward(x)
+
+            y1_student, y2_student, y3_student, y4_student = (
+                student.forward_with_adapters(x)
+            )
+
+            y1_teacher = out_teacher.hidden_states[anchor_points[0]]
+            y2_teacher = out_teacher.hidden_states[anchor_points[1]]
+            y3_teacher = out_teacher.hidden_states[anchor_points[2]]
+            y4_teacher = out_teacher.hidden_states[anchor_points[3]]
+
+            stage1_loss = l2_loss_function.forward(y1_student, y1_teacher)
+            stage2_loss = l2_loss_function.forward(y2_student, y2_teacher)
+            stage3_loss = l2_loss_function.forward(y3_student, y3_teacher)
+            stage4_loss = l2_loss_function.forward(y4_student, y4_teacher)
+
+            combined_loss = stage_weight.forward(
+                torch.stack([stage1_loss, stage2_loss, stage3_loss, stage4_loss])
+            )
+
+            scaled_loss = combined_loss / args.gradient_accumulation_steps
+
+        scaled_loss.backward()
+
+        total_stage1_l2_loss += stage1_loss.item()
+        total_stage2_l2_loss += stage2_loss.item()
+        total_stage3_l2_loss += stage3_loss.item()
+        total_stage4_l2_loss += stage4_loss.item()
+
+        num_batches += 1
+
+        progress_bar.update(1)
+
+        if index % args.gradient_accumulation_steps == 0:
+            norm = clip_grad_norm_(student.parameters(), args.max_gradient_norm)
+            _ = clip_grad_norm_(stage_weight.parameters(), args.max_gradient_norm)
+
+            optimizer.step()
+            stage_optimizer.step()
+
+            optimizer.zero_grad()
+            stage_optimizer.zero_grad()
+
+            progress_bar.close()
+
+            average_stage1_l2_loss = total_stage1_l2_loss / num_batches
+            average_stage2_l2_loss = total_stage2_l2_loss / num_batches
+            average_stage3_l2_loss = total_stage3_l2_loss / num_batches
+            average_stage4_l2_loss = total_stage4_l2_loss / num_batches
+
+            gradient_norm = norm.item()
+
+            loss_weights = stage_weight.loss_weights.detach().cpu().numpy()
+
+            logger.add_scalar("Stage 1 L2", average_stage1_l2_loss, step)
+            logger.add_scalar("Stage 2 L2", average_stage2_l2_loss, step)
+            logger.add_scalar("Stage 3 L2", average_stage3_l2_loss, step)
+            logger.add_scalar("Stage 4 L2", average_stage4_l2_loss, step)
+            logger.add_scalar("Gradient Norm", gradient_norm, step)
+            logger.add_scalar("Stage 1 Weight", loss_weights[0], step)
+            logger.add_scalar("Stage 2 Weight", loss_weights[1], step)
+            logger.add_scalar("Stage 3 Weight", loss_weights[2], step)
+            logger.add_scalar("Stage 4 Weight", loss_weights[3], step)
+
+            print(
+                f"Step {step:,}:",
+                f"Stage 1 L2: {average_stage1_l2_loss:.5f},",
+                f"Stage 2 L2: {average_stage2_l2_loss:.5f},",
+                f"Stage 3 L2: {average_stage3_l2_loss:.5f},",
+                f"Stage 4 L2: {average_stage4_l2_loss:.5f},",
+                f"Gradient Norm: {gradient_norm:.5f}",
+            )
+
+            if step % args.eval_interval == 0:
+                student.eval()
+
+                total_stage1_cosine_similarity = 0.0
+                total_stage2_cosine_similarity = 0.0
+                total_stage3_cosine_similarity = 0.0
+                total_stage4_cosine_similarity = 0.0
+                num_eval_samples = 0
+
+                for x in tqdm(test_loader, desc="Testing", leave=False):
+                    x = x.to(args.device, non_blocking=True)
+
+                    with torch.inference_mode():
+                        out_teacher = teacher.forward(x)
+
+                    y1_teacher = out_teacher.hidden_states[anchor_points[0]]
+                    y2_teacher = out_teacher.hidden_states[anchor_points[1]]
+                    y3_teacher = out_teacher.hidden_states[anchor_points[2]]
+                    y4_teacher = out_teacher.hidden_states[anchor_points[3]]
+
+                    y1_student, y2_student, y3_student, y4_student = (
+                        student.embed_teacher(x)
+                    )
+
+                    y1_cosine_similarity = cosine_similarity(
+                        y1_student.flatten(1), y1_teacher.flatten(1)
+                    )
+
+                    y2_cosine_similarity = cosine_similarity(
+                        y2_student.flatten(1), y2_teacher.flatten(1)
+                    )
+
+                    y3_cosine_similarity = cosine_similarity(
+                        y3_student.flatten(1), y3_teacher.flatten(1)
+                    )
+
+                    y4_cosine_similarity = cosine_similarity(
+                        y4_student.flatten(1), y4_teacher.flatten(1)
+                    )
+
+                    n = x.size(0)
+
+                    total_stage1_cosine_similarity += y1_cosine_similarity.sum().item()
+                    total_stage2_cosine_similarity += y2_cosine_similarity.sum().item()
+                    total_stage3_cosine_similarity += y3_cosine_similarity.sum().item()
+                    total_stage4_cosine_similarity += y4_cosine_similarity.sum().item()
+
+                    num_eval_samples += n
+
+                average_stage1_cosine_similarity = (
+                    total_stage1_cosine_similarity / num_eval_samples
+                )
+
+                average_stage2_cosine_similarity = (
+                    total_stage2_cosine_similarity / num_eval_samples
+                )
+
+                average_stage3_cosine_similarity = (
+                    total_stage3_cosine_similarity / num_eval_samples
+                )
+
+                average_stage4_cosine_similarity = (
+                    total_stage4_cosine_similarity / num_eval_samples
+                )
+
+                logger.add_scalar(
+                    "Stage 1 Cosine Similarity", average_stage1_cosine_similarity, step
+                )
+
+                logger.add_scalar(
+                    "Stage 2 Cosine Similarity", average_stage2_cosine_similarity, step
+                )
+
+                logger.add_scalar(
+                    "Stage 3 Cosine Similarity", average_stage3_cosine_similarity, step
+                )
+
+                logger.add_scalar(
+                    "Stage 4 Cosine Similarity", average_stage4_cosine_similarity, step
+                )
+
+                print(
+                    f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.5f}, "
+                    f"Stage 2 Cosine Similarity: {average_stage2_cosine_similarity:.5f}, "
+                    f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.5f}, "
+                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f}"
+                )
+
+                student.train()
+
+            if step % args.checkpoint_interval == 0:
+                checkpoint = {
+                    "step": step,
+                    "model_args": model_args,
+                    "model": student.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "stage_weight": stage_weight.state_dict(),
+                    "stage_optimizer": stage_optimizer.state_dict(),
+                }
+
+                torch.save(checkpoint, args.checkpoint_path)
+
+                print("Checkpoint saved")
+
+            if step >= args.max_steps:
+                break
+
+            step += 1
+
+            total_stage1_l2_loss = 0.0
+            total_stage2_l2_loss = 0.0
+            total_stage3_l2_loss = 0.0
+            total_stage4_l2_loss = 0.0
+
+            num_batches = 0
+
+            progress_bar = new_progress_bar(desc=f"Step {step:,}")
+
+    print("Done!")
+
+
+if __name__ == "__main__":
+    main()

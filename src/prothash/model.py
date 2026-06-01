@@ -1,6 +1,5 @@
-from math import sqrt, ceil, pi
+from math import sqrt, ceil, floor, pi
 from functools import partial
-from typing import Self
 
 import torch
 
@@ -8,26 +7,23 @@ from torch import Tensor
 
 from torch.nn import (
     Module,
-    ModuleList,
+    Sequential,
     Embedding,
     Linear,
     SiLU,
     RMSNorm,
-    Dropout1d,
     Identity,
-    Parameter,
     Buffer,
 )
 
 from torch.nn.functional import scaled_dot_product_attention
-from torch.nn.utils.parametrize import register_parametrization, remove_parametrizations
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
 from torchao.quantization import Int8WeightOnlyConfig, quantize_
 
 from torchao.quantization.qat import (
-    IntxFakeQuantizeConfig,
-    QATConfig,
+    FakeQuantizeConfig,
+    IntXQuantizationAwareTrainingConfig,
     FromIntXQuantizationAwareTrainingConfig,
 )
 
@@ -47,11 +43,9 @@ class ProtHash(Module, PyTorchModelHubMixin):
         context_length: int,
         teacher_dimensions: int,
         embedding_dimensions: int,
-        q_heads: int,
-        kv_heads: int,
+        num_attention_heads: int,
         hidden_ratio: int,
         num_encoder_layers: int,
-        dropout: float,
     ) -> None:
         super().__init__()
 
@@ -62,17 +56,28 @@ class ProtHash(Module, PyTorchModelHubMixin):
         self.encoder = Encoder(
             context_length,
             embedding_dimensions,
-            q_heads,
-            kv_heads,
+            num_attention_heads,
             num_encoder_layers,
             hidden_ratio,
-            dropout,
         )
 
         if embedding_dimensions != teacher_dimensions:
-            self.head = AdapterHead(embedding_dimensions, teacher_dimensions)
+            new_adapter_head = partial(
+                AdapterHead,
+                in_dimensions=embedding_dimensions,
+                out_dimensions=teacher_dimensions,
+            )
+
+            self.adapter1 = new_adapter_head()
+            self.adapter2 = new_adapter_head()
+            self.adapter3 = new_adapter_head()
+            self.adapter4 = new_adapter_head()
+
         else:
-            self.head = Identity()
+            self.adapter1 = Identity()
+            self.adapter2 = Identity()
+            self.adapter3 = Identity()
+            self.adapter4 = Identity()
 
         self.vocabulary_size = vocabulary_size
         self.padding_index = padding_index
@@ -95,53 +100,50 @@ class ProtHash(Module, PyTorchModelHubMixin):
             for param in module.parameters():
                 param.requires_grad = False
 
-    def add_lora_adapters(self, rank: int, alpha: float) -> None:
-        """Reparameterize the weights of the model using LoRA adapters."""
-
-        self.encoder.add_lora_adapters(rank, alpha)
-
-        if isinstance(self.head, AdapterHead):
-            self.head.add_lora_adapters(rank, alpha)
-
-    def merge_lora_adapters(self) -> None:
-        """Merge the LoRA adapters with the original parameters."""
-
-        for module in self.modules():
-            if not hasattr(module, "parametrizations"):
-                continue
-
-            lora_params = []
-
-            for name, parameterizations in module.parametrizations.items():
-                for parametrization in parameterizations:
-                    if isinstance(parametrization, LoRA):
-                        lora_params.append(name)
-
-            for name in lora_params:
-                remove_parametrizations(module, name)
-
-    def add_fake_quantized_tensors(self) -> None:
+    def add_fake_quantized_tensors(self, group_size: int) -> None:
         """Prepare the model for quantization-aware training."""
 
-        self.encoder.add_fake_quantized_tensors()
+        for module in self.modules():
+            if isinstance(module, Linear):
+                assert module.in_features % group_size == 0, (
+                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
+                    f" of layer {module}."
+                )
+
+        weight_config = FakeQuantizeConfig(torch.int8, group_size=group_size)
+
+        config = IntXQuantizationAwareTrainingConfig(weight_config=weight_config)
+
+        quantize_(self, config)
 
     def remove_fake_quantized_tensors(self) -> None:
         """Convert fake quantized tensors back to regular tensors."""
 
-        self.encoder.remove_fake_quantized_tensors()
+        config = FromIntXQuantizationAwareTrainingConfig()
 
-    def quantize_weights(self) -> None:
+        quantize_(self, config)
+
+    def quantize_weights(self, group_size: int) -> None:
         """Quantize the weights of the model."""
 
-        self.encoder.quantize_weights()
+        for module in self.modules():
+            if isinstance(module, Linear):
+                assert module.in_features % group_size == 0, (
+                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
+                    f" of layer {module}."
+                )
 
-    def forward(self, x: Tensor) -> Tensor:
+        config = Int8WeightOnlyConfig(group_size=group_size)
+
+        quantize_(self, config)
+
+    def forward(self, x: Tensor) -> tuple[Tensor, ...]:
         """
         Args:
             x (Tensor): The token index sequence of shape (batch_size, sequence_length).
         """
 
-        b, t = x.size()
+        t = x.size(1)
 
         assert (
             t <= self.context_length
@@ -149,19 +151,22 @@ class ProtHash(Module, PyTorchModelHubMixin):
 
         z = self.token_embeddings.forward(x)
 
-        z = self.encoder.forward(z)
+        z1, z2, z3, z4 = self.encoder.forward(z)
 
-        return z
+        return z1, z2, z3, z4
 
-    def forward_with_adapter(self, x: Tensor) -> Tensor:
-        z = self.forward(x)
+    def forward_with_adapters(self, x: Tensor) -> Tensor:
+        z1, z2, z3, z4 = self.forward(x)
 
-        z = self.head.forward(z)
+        z1 = self.adapter1(z1)
+        z2 = self.adapter2(z2)
+        z3 = self.adapter3(z3)
+        z4 = self.adapter4(z4)
 
-        return z
+        return z1, z2, z3, z4
 
     @torch.inference_mode()
-    def embed_native(self, x: Tensor) -> Tensor:
+    def embed_native(self, x: Tensor) -> tuple[Tensor, ...]:
         """
         Output the contextual embeddings of the input sequence in native embedding dimensionality.
 
@@ -169,18 +174,15 @@ class ProtHash(Module, PyTorchModelHubMixin):
             x (Tensor): The token index sequence of shape (batch_size, sequence_length).
 
         Returns:
-            Tensor: The contextual embeddings of shape (batch_size, embedding_dimensions).
+            tuple[Tensor, ...]: The contextual embeddings of shape (batch_size, embedding_dimensions).
         """
 
-        z = self.forward(x)
+        z1, z2, z3, z4 = self.forward(x)
 
-        # Grab the classification token <CLS> vectors.
-        z = z[:, 0, :]
-
-        return z
+        return z1, z2, z3, z4
 
     @torch.inference_mode()
-    def embed_teacher(self, x: Tensor) -> Tensor:
+    def embed_teacher(self, x: Tensor) -> tuple[Tensor, ...]:
         """
         Output the contextual embeddings of the input sequence in the teacher's dimensionality.
 
@@ -188,15 +190,12 @@ class ProtHash(Module, PyTorchModelHubMixin):
             x (Tensor): The token index sequence of shape (batch_size, sequence_length).
 
         Returns:
-            Tensor: The contextual embeddings of shape (batch_size, teacher_dimensions).
+            tuple[Tensor, ...]: The contextual embeddings of shape (batch_size, teacher_dimensions).
         """
 
-        z = self.forward_with_adapter(x)
+        z1, z2, z3, z4 = self.forward_with_adapters(x)
 
-        # Grab the classification token <CLS> vectors.
-        z = z[:, 0, :]
-
-        return z
+        return z1, z2, z3, z4
 
 
 class ONNXModelNative(Module):
@@ -211,7 +210,9 @@ class ONNXModelNative(Module):
         self.model = model
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.model.embed_native(x)
+        _, _, _, z4 = self.model.embed_native(x)
+
+        return z4
 
 
 class ONNXModelTeacher(Module):
@@ -226,7 +227,9 @@ class ONNXModelTeacher(Module):
         self.model = model
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.model.embed_teacher(x)
+        _, _, _, z4 = self.model.embed_teacher(x)
+
+        return z4
 
 
 class Encoder(Module):
@@ -236,28 +239,36 @@ class Encoder(Module):
         self,
         context_length: int,
         embedding_dimensions: int,
-        q_heads: int,
-        kv_heads: int,
+        num_attention_heads: int,
         num_layers: int,
         hidden_ratio: int,
-        dropout: float,
     ):
         super().__init__()
 
-        assert num_layers > 0, "Number of layers must be greater than 0."
+        assert num_layers >= 4, "Number of layers must be greater than or equal to 4."
 
-        self.layers = ModuleList(
-            [
-                EncoderBlock(
-                    context_length,
-                    embedding_dimensions,
-                    q_heads,
-                    kv_heads,
-                    hidden_ratio,
-                    dropout,
-                )
-                for _ in range(num_layers)
-            ]
+        new_encoder_block = partial(
+            EncoderBlock,
+            context_length=context_length,
+            embedding_dimensions=embedding_dimensions,
+            num_heads=num_attention_heads,
+            hidden_ratio=hidden_ratio,
+        )
+
+        self.stage1 = Sequential(
+            *[new_encoder_block() for _ in range(ceil(num_layers / 4))]
+        )
+
+        self.stage2 = Sequential(
+            *[new_encoder_block() for _ in range(floor(num_layers / 4))]
+        )
+
+        self.stage3 = Sequential(
+            *[new_encoder_block() for _ in range(ceil(num_layers / 4))]
+        )
+
+        self.stage4 = Sequential(
+            *[new_encoder_block() for _ in range(floor(num_layers / 4))]
         )
 
         self.checkpoint = lambda layer, x: layer.forward(x)
@@ -267,35 +278,13 @@ class Encoder(Module):
 
         self.checkpoint = partial(torch_checkpoint, use_reentrant=False)
 
-    def add_lora_adapters(self, rank: int, alpha: float) -> None:
-        """Reparameterize the weights of the decoder using LoRA adapters."""
-
-        for layer in self.layers:
-            layer.add_lora_adapters(rank, alpha)
-
-    def add_fake_quantized_tensors(self) -> None:
-        """Prepare the model for quantization-aware training."""
-
-        for layer in self.layers:
-            layer.add_fake_quantized_tensors()
-
-    def remove_fake_quantized_tensors(self) -> None:
-        """Convert fake quantized tensors back to regular tensors."""
-
-        for layer in self.layers:
-            layer.remove_fake_quantized_tensors()
-
-    def quantize_weights(self) -> None:
-        """Quantize the weights of the model."""
-
-        for layer in self.layers:
-            layer.quantize_weights()
-
     def forward(self, x: Tensor) -> Tensor:
-        for layer in self.layers:
-            x = self.checkpoint(layer, x)
+        z1 = self.checkpoint(self.stage1, x)
+        z2 = self.checkpoint(self.stage2, z1)
+        z3 = self.checkpoint(self.stage3, z2)
+        z4 = self.checkpoint(self.stage4, z3)
 
-        return x
+        return z1, z2, z3, z4
 
 
 class EncoderBlock(Module):
@@ -305,45 +294,17 @@ class EncoderBlock(Module):
         self,
         context_length: int,
         embedding_dimensions: int,
-        q_heads: int,
-        kv_heads: int,
+        num_heads: int,
         hidden_ratio: int,
-        dropout: float,
     ):
         super().__init__()
 
-        self.stage1 = SelfAttention(
-            context_length, embedding_dimensions, q_heads, kv_heads, dropout
-        )
+        self.stage1 = SelfAttention(context_length, embedding_dimensions, num_heads)
 
-        self.stage2 = InvertedBottleneck(embedding_dimensions, hidden_ratio, dropout)
+        self.stage2 = InvertedBottleneck(embedding_dimensions, hidden_ratio)
 
         self.norm1 = RMSNorm(embedding_dimensions)
         self.norm2 = RMSNorm(embedding_dimensions)
-
-    def add_lora_adapters(self, rank: int, alpha: float) -> None:
-        """Reparameterize the weights of the encoder using LoRA adapters."""
-
-        self.stage1.add_lora_adapters(rank, alpha)
-        self.stage2.add_lora_adapters(rank, alpha)
-
-    def add_fake_quantized_tensors(self) -> None:
-        """Prepare the model for quantization-aware training."""
-
-        self.stage1.add_fake_quantized_tensors()
-        self.stage2.add_fake_quantized_tensors(self.stage1.head_dimensions)
-
-    def remove_fake_quantized_tensors(self) -> None:
-        """Convert fake quantized tensors back to regular tensors."""
-
-        self.stage1.remove_fake_quantized_tensors()
-        self.stage2.remove_fake_quantized_tensors()
-
-    def quantize_weights(self) -> None:
-        """Quantize the weights of the model."""
-
-        self.stage1.quantize_weights()
-        self.stage2.quantize_weights(self.stage1.head_dimensions)
 
     def forward(self, x: Tensor) -> Tensor:
         z = self.norm1.forward(x)
@@ -366,93 +327,35 @@ class SelfAttention(Module):
         self,
         context_length: int,
         embedding_dimensions: int,
-        q_heads: int,
-        kv_heads: int,
-        dropout: float,
+        num_heads: int,
     ):
         super().__init__()
 
         assert embedding_dimensions > 0, "Embedding dimensions must be greater than 0."
-        assert q_heads > 0, "Number of query heads must be greater than 0."
-        assert kv_heads > 0, "Number of key-value heads must be greater than 0."
+        assert num_heads > 0, "Number of heads must be greater than 0."
 
         assert (
-            q_heads >= kv_heads
-        ), "Number of query heads must be greater than or equal to the number of key-value heads."
+            embedding_dimensions % num_heads == 0
+        ), "Embedding dimensions must be divisible by the number of heads."
 
-        assert (
-            embedding_dimensions % q_heads == 0
-        ), "Embedding dimensions must be divisible by the number of query heads."
-
-        head_dimensions = embedding_dimensions // q_heads
-
-        kv_dimensions = kv_heads * head_dimensions
+        head_dimensions = embedding_dimensions // num_heads
 
         self.position_embeddings = RotaryPositionalEmbedding(
             context_length, head_dimensions
         )
 
         self.q_proj = Linear(embedding_dimensions, embedding_dimensions, bias=False)
-        self.k_proj = Linear(embedding_dimensions, kv_dimensions, bias=False)
-        self.v_proj = Linear(embedding_dimensions, kv_dimensions, bias=False)
+        self.k_proj = Linear(embedding_dimensions, embedding_dimensions, bias=False)
+        self.v_proj = Linear(embedding_dimensions, embedding_dimensions, bias=False)
 
         self.out_proj = Linear(embedding_dimensions, embedding_dimensions, bias=False)
 
         scale = 1.0 / sqrt(head_dimensions)
 
-        is_gqa = q_heads > kv_heads
-
         self.embedding_dimensions = embedding_dimensions
-        self.q_heads = q_heads
-        self.kv_heads = kv_heads
+        self.num_heads = num_heads
         self.head_dimensions = head_dimensions
         self.scale = scale
-        self.is_gqa = is_gqa
-        self.dropout = dropout
-
-    def add_lora_adapters(self, rank: int, alpha: float) -> None:
-        """Reparameterize the weights of the attention module using LoRA adapters."""
-
-        register_parametrization(
-            self.q_proj, "weight", LoRA.from_linear(self.q_proj, rank, alpha)
-        )
-
-        register_parametrization(
-            self.k_proj, "weight", LoRA.from_linear(self.k_proj, rank, alpha)
-        )
-
-        register_parametrization(
-            self.v_proj, "weight", LoRA.from_linear(self.v_proj, rank, alpha)
-        )
-
-        register_parametrization(
-            self.out_proj, "weight", LoRA.from_linear(self.out_proj, rank, alpha)
-        )
-
-    def add_fake_quantized_tensors(self) -> None:
-        """Prepare the model for quantization-aware training."""
-
-        weight_config = IntxFakeQuantizeConfig(
-            torch.int8, group_size=self.head_dimensions
-        )
-
-        config = QATConfig(weight_config=weight_config, step="prepare")
-
-        quantize_(self, config)
-
-    def remove_fake_quantized_tensors(self) -> None:
-        """Convert fake quantized tensors back to regular tensors."""
-
-        config = FromIntXQuantizationAwareTrainingConfig()
-
-        quantize_(self, config)
-
-    def quantize_weights(self) -> None:
-        """Quantize the weights of the model."""
-
-        config = Int8WeightOnlyConfig(group_size=self.head_dimensions)
-
-        quantize_(self, config)
 
     def forward(self, x: Tensor) -> Tensor:
         b, t, d = x.size()
@@ -461,21 +364,13 @@ class SelfAttention(Module):
         k = self.k_proj.forward(x)
         v = self.v_proj.forward(x)
 
-        q = q.view(b, t, self.q_heads, self.head_dimensions).transpose(1, 2)
-        k = k.view(b, t, self.kv_heads, self.head_dimensions).transpose(1, 2)
-        v = v.view(b, t, self.kv_heads, self.head_dimensions).transpose(1, 2)
+        q = q.view(b, t, self.num_heads, self.head_dimensions).transpose(1, 2)
+        k = k.view(b, t, self.num_heads, self.head_dimensions).transpose(1, 2)
+        v = v.view(b, t, self.num_heads, self.head_dimensions).transpose(1, 2)
 
         q, k = self.position_embeddings.forward(q, k)
 
-        z = scaled_dot_product_attention(
-            q,
-            k,
-            v,
-            scale=self.scale,
-            dropout_p=self.dropout if self.training else 0,
-            is_causal=False,
-            enable_gqa=self.is_gqa,
-        )
+        z = scaled_dot_product_attention(q, k, v, scale=self.scale)
 
         z = z.transpose(1, 2).contiguous().view(b, t, d)
 
@@ -515,6 +410,7 @@ class RotaryPositionalEmbedding(Module):
             The computed base value (as an integer) used for generating inverse frequencies
             in the rotary positional embedding calculation.
         """
+
         exponent = head_dimensions / (head_dimensions - 2)
 
         base = ceil((context_length / (2 * pi)) ** exponent)
@@ -540,7 +436,7 @@ class RotaryPositionalEmbedding(Module):
         self.inv_freq = Buffer(inv_freq)
 
     def forward(self, q: Tensor, k: Tensor) -> tuple[Tensor, Tensor]:
-        b, h, t, d = q.size()
+        t = q.size(2)
 
         position_ids = torch.arange(t).float().to(q.device)
 
@@ -560,7 +456,7 @@ class RotaryPositionalEmbedding(Module):
 class InvertedBottleneck(Module):
     """A two layer fully-connected network with a wide non-linear activation."""
 
-    def __init__(self, embedding_dimensions: int, hidden_ratio: int, dropout: float):
+    def __init__(self, embedding_dimensions: int, hidden_ratio: int):
         super().__init__()
 
         assert hidden_ratio in {1, 2, 4}, "Hidden ratio must be either 1, 2, or 4."
@@ -572,48 +468,11 @@ class InvertedBottleneck(Module):
 
         self.silu = SiLU()
 
-        self.dropout = Dropout1d(p=dropout)
-
         self.hidden_dimensions = hidden_dimensions
-
-    def add_lora_adapters(self, rank: int, alpha: float) -> None:
-        """Reparameterize the weights of the feedforward module using LoRA adapters."""
-
-        register_parametrization(
-            self.linear1, "weight", LoRA.from_linear(self.linear1, rank, alpha)
-        )
-
-        register_parametrization(
-            self.linear2, "weight", LoRA.from_linear(self.linear2, rank, alpha)
-        )
-
-    def add_fake_quantized_tensors(self, group_size: int) -> None:
-        """Prepare the model for quantization-aware training."""
-
-        weight_config = IntxFakeQuantizeConfig(torch.int8, group_size=group_size)
-
-        config = QATConfig(weight_config=weight_config)
-
-        quantize_(self, config)
-
-    def remove_fake_quantized_tensors(self) -> None:
-        """Convert fake quantized tensors back to regular tensors."""
-
-        config = FromIntXQuantizationAwareTrainingConfig()
-
-        quantize_(self, config)
-
-    def quantize_weights(self, group_size: int) -> None:
-        """Quantize the weights of the model."""
-
-        config = Int8WeightOnlyConfig(group_size=group_size)
-
-        quantize_(self, config)
 
     def forward(self, x: Tensor) -> Tensor:
         z = self.linear1.forward(x)
         z = self.silu.forward(z)
-        z = self.dropout.forward(z)
         z = self.linear2.forward(z)
 
         return z
@@ -627,45 +486,5 @@ class AdapterHead(Module):
 
         self.linear = Linear(in_dimensions, out_dimensions, bias=False)
 
-    def add_lora_adapters(self, rank: int, alpha: float) -> None:
-        """Reparameterize the weights of the feedforward module using LoRA adapters."""
-
-        register_parametrization(
-            self.linear, "weight", LoRA.from_linear(self.linear, rank, alpha)
-        )
-
     def forward(self, x: Tensor) -> Tensor:
         return self.linear(x)
-
-
-class LoRA(Module):
-    """Low rank weight decomposition transformation."""
-
-    @classmethod
-    def from_linear(cls, linear: Linear, rank: int, alpha: float) -> Self:
-        out_features, in_features = linear.weight.shape
-
-        return cls(in_features, out_features, rank, alpha)
-
-    def __init__(self, in_features: int, out_features: int, rank: int, alpha: float):
-        super().__init__()
-
-        assert rank > 0, "Rank must be greater than 0."
-        assert alpha > 0.0, "Alpha must be greater than 0."
-
-        lora_a = torch.randn(rank, in_features) / sqrt(rank)
-        lora_b = torch.zeros(out_features, rank)
-
-        self.lora_a = Parameter(lora_a)
-        self.lora_b = Parameter(lora_b)
-
-        self.alpha = alpha
-
-    def forward(self, weight: Tensor) -> Tensor:
-        z = self.lora_b @ self.lora_a
-
-        z *= self.alpha
-
-        z = weight + z
-
-        return z

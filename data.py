@@ -1,4 +1,6 @@
-from datasets import load_dataset
+import random
+
+import array
 
 import torch
 
@@ -10,19 +12,17 @@ from torch.nn.utils.rnn import pad_sequence
 from esm.tokenization import EsmSequenceTokenizer
 
 
-class SwissProt(Dataset):
+class UniRef50(Dataset):
     """
-    A collection of high-quality human-annotated protein sequences and their associated gene
-    ontology terms taken from the SwissProt subsection of the UniProt database.
+    A collection of protein sequences from the UniRef50 database.
     """
-
-    DATASET_NAME = "andrewdalpino/SwissProt-Gene-Ontology"
 
     def __init__(
         self,
+        path: str,
         tokenizer: EsmSequenceTokenizer,
-        min_sequence_length: int = 1,
-        max_sequence_length: int = 2048,
+        min_sequence_length: int,
+        max_sequence_length: int,
     ):
         super().__init__()
 
@@ -31,30 +31,45 @@ class SwissProt(Dataset):
                 f"Min sequence length must be greater than 0, {min_sequence_length} given."
             )
 
-        if min_sequence_length < 1:
+        if max_sequence_length < 1:
             raise ValueError(
                 f"Max sequence length must be greater than 0, {max_sequence_length} given."
             )
 
-        dataset = load_dataset(self.DATASET_NAME)
+        offsets = array.array("Q")
+        lengths = array.array("L")
 
-        dataset = dataset["train"]
+        with open(path, "rb") as f:
+            line = f.readline()
 
-        dataset = dataset.filter(
-            lambda sample: len(sample["sequence"]) >= min_sequence_length
-            and len(sample["sequence"]) <= max_sequence_length
-        )
+            while line:
+                if line.startswith(b">"):
+                    offset = f.tell() - len(line)
 
-        self.dataset = dataset
+                    line = f.readline()
+
+                    length = 0
+
+                    while line and not line.startswith(b">"):
+                        length += len(line.strip())
+
+                        line = f.readline()
+
+                    if min_sequence_length <= length <= max_sequence_length:
+                        offsets.append(offset)
+                        lengths.append(length)
+
+                else:
+                    line = f.readline()
+
         self.tokenizer = tokenizer
+        self.path = path
         self.min_sequence_length = min_sequence_length
         self.max_sequence_length = max_sequence_length
+        self.offsets = offsets
+        self.lengths = lengths
 
     def collate_pad_right(self, batch):
-        """
-        Pads the sequences in the batch to the maximum sequence length on the right.
-        """
-
         sequences = [sequence for sequence in batch]
 
         padded_sequences = pad_sequence(
@@ -67,21 +82,93 @@ class SwissProt(Dataset):
         return padded_sequences
 
     def __getitem__(self, index: int) -> Tensor:
-        sample = self.dataset[index]
+        offset = self.offsets[index]
+
+        with open(self.path, "rb") as f:
+            f.seek(offset)
+
+            f.readline()
+
+            seq_lines = []
+
+            line = f.readline()
+
+            while line and not line.startswith(b">"):
+                seq_lines.append(line.strip().decode())
+
+                line = f.readline()
+
+        sequence = "".join(seq_lines)
 
         out = self.tokenizer(
-            sample["sequence"],
+            sequence,
             max_length=self.max_sequence_length,
             truncation=True,
         )
 
-        tokens = out["input_ids"]
+        x = torch.tensor(out["input_ids"], dtype=torch.int32)
 
-        x = torch.tensor(tokens, dtype=torch.int64)
-
-        assert x.size(0) <= self.max_sequence_length
+        assert self.min_sequence_length <= x.size(0) <= self.max_sequence_length
 
         return x
 
     def __len__(self):
-        return len(self.dataset)
+        return len(self.offsets)
+
+
+class LengthBucketBatchSampler:
+    def __init__(self, dataset, batch_size: int, num_buckets: int):
+        num_buckets = min(num_buckets, max(1, len(dataset) // batch_size))
+
+        n = len(dataset)
+
+        sorted_indices = sorted(
+            range(n), key=lambda i: dataset.dataset.lengths[dataset.indices[i]]
+        )
+
+        bucket_size = max(1, n // num_buckets)
+
+        buckets = []
+
+        for i in range(num_buckets):
+            start = i * bucket_size
+            end = n if i == num_buckets - 1 else (i + 1) * bucket_size
+
+            buckets.append(sorted_indices[start:end])
+
+        self.batch_size = batch_size
+        self.buckets = buckets
+
+    def __iter__(self):
+        while True:
+            for bucket in self.buckets:
+                random.shuffle(bucket)
+
+            batches = []
+
+            for bucket in self.buckets:
+                for i in range(0, len(bucket), self.batch_size):
+                    batches.append(bucket[i : i + self.batch_size])
+
+            random.shuffle(batches)
+
+            yield from batches
+
+
+class SortedLengthBatchSampler:
+    def __init__(self, dataset, batch_size: int):
+        n = len(dataset)
+
+        sorted_indices = sorted(
+            range(n), key=lambda i: dataset.dataset.lengths[dataset.indices[i]]
+        )
+
+        self.batches = [
+            sorted_indices[i : i + batch_size] for i in range(0, n, batch_size)
+        ]
+
+    def __iter__(self):
+        return iter(self.batches)
+
+    def __len__(self):
+        return len(self.batches)
