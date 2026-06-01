@@ -5,7 +5,7 @@ from functools import partial
 
 import torch
 
-from torch.optim import AdamW, SGD
+from torch.optim import AdamW
 from torch.utils.data import DataLoader, random_split
 from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.backends.mps import is_available as mps_is_available
@@ -21,8 +21,6 @@ from esm.models.esmc import ESMC
 
 from src.prothash.model import ProtHash
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
-from loss import AdaptiveStageWeighting
-
 from tqdm import tqdm
 
 AVAILABLE_TEACHERS = {"esmc_300m", "esmc_600m"}
@@ -49,7 +47,6 @@ def main():
     parser.add_argument("--max_sequence_length", default=2048, type=int)
     parser.add_argument("--quantization_aware_training", action="store_true")
     parser.add_argument("--learning_rate", default=1e-4, type=float)
-    parser.add_argument("--stage_learning_rate", default=1e-3, type=float)
     parser.add_argument("--max_gradient_norm", default=100.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
@@ -92,6 +89,11 @@ def main():
     if args.eval_interval < 1:
         raise ValueError(
             f"Eval interval must be greater than 0, {args.eval_interval} given."
+        )
+
+    if args.num_eval_samples < 1:
+        raise ValueError(
+            f"Number of evaluation samples must be greater than 0, {args.num_eval_samples} given."
         )
 
     if args.checkpoint_interval < 1:
@@ -156,9 +158,7 @@ def main():
     teacher = ESMC.from_pretrained(args.teacher_name)
 
     # Freeze teacher model parameters.
-    for module in teacher.modules():
-        for param in module.parameters():
-            param.requires_grad = False
+    teacher.requires_grad_(False)
 
     teacher = teacher.to(args.device)
 
@@ -190,24 +190,15 @@ def main():
 
     l2_loss_function = MSELoss()
 
-    stage_weight = AdaptiveStageWeighting(4, 0.1).to(args.device)
-
     optimizer = AdamW(student.parameters(), lr=args.learning_rate)
-
-    stage_optimizer = SGD(stage_weight.parameters(), lr=args.stage_learning_rate)
 
     step = 1
 
     if args.resume:
-        checkpoint = torch.load(
-            args.checkpoint_path, map_location=args.device, weights_only=False
-        )
+        checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
 
         student.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
-
-        stage_weight.load_state_dict(checkpoint["stage_weight"])
-        stage_optimizer.load_state_dict(checkpoint["stage_optimizer"])
 
         step += checkpoint["step"]
 
@@ -250,9 +241,7 @@ def main():
             stage3_loss = l2_loss_function.forward(y3_student, y3_teacher)
             stage4_loss = l2_loss_function.forward(y4_student, y4_teacher)
 
-            combined_loss = stage_weight.forward(
-                torch.stack([stage1_loss, stage2_loss, stage3_loss, stage4_loss])
-            )
+            combined_loss = stage1_loss + stage2_loss + stage3_loss + stage4_loss
 
             scaled_loss = combined_loss / args.gradient_accumulation_steps
 
@@ -269,13 +258,10 @@ def main():
 
         if index % args.gradient_accumulation_steps == 0:
             norm = clip_grad_norm_(student.parameters(), args.max_gradient_norm)
-            _ = clip_grad_norm_(stage_weight.parameters(), args.max_gradient_norm)
 
             optimizer.step()
-            stage_optimizer.step()
 
             optimizer.zero_grad()
-            stage_optimizer.zero_grad()
 
             progress_bar.close()
 
@@ -286,17 +272,11 @@ def main():
 
             gradient_norm = norm.item()
 
-            loss_weights = stage_weight.loss_weights.detach().cpu().numpy()
-
             logger.add_scalar("Stage 1 L2", average_stage1_l2_loss, step)
             logger.add_scalar("Stage 2 L2", average_stage2_l2_loss, step)
             logger.add_scalar("Stage 3 L2", average_stage3_l2_loss, step)
             logger.add_scalar("Stage 4 L2", average_stage4_l2_loss, step)
             logger.add_scalar("Gradient Norm", gradient_norm, step)
-            logger.add_scalar("Stage 1 Weight", loss_weights[0], step)
-            logger.add_scalar("Stage 2 Weight", loss_weights[1], step)
-            logger.add_scalar("Stage 3 Weight", loss_weights[2], step)
-            logger.add_scalar("Stage 4 Weight", loss_weights[3], step)
 
             print(
                 f"Step {step:,}:",
@@ -314,6 +294,7 @@ def main():
                 total_stage2_cosine_similarity = 0.0
                 total_stage3_cosine_similarity = 0.0
                 total_stage4_cosine_similarity = 0.0
+
                 num_eval_samples = 0
 
                 for x in tqdm(test_loader, desc="Testing", leave=False):
@@ -403,8 +384,6 @@ def main():
                     "model_args": model_args,
                     "model": student.state_dict(),
                     "optimizer": optimizer.state_dict(),
-                    "stage_weight": stage_weight.state_dict(),
-                    "stage_optimizer": stage_optimizer.state_dict(),
                 }
 
                 torch.save(checkpoint, args.checkpoint_path)
@@ -424,6 +403,8 @@ def main():
             num_batches = 0
 
             progress_bar = new_progress_bar(desc=f"Step {step:,}")
+
+    logger.close()
 
     print("Done!")
 
