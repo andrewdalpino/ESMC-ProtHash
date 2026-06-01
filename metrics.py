@@ -1,5 +1,40 @@
 import torch
 
+from torch import Tensor
+
+from torch.nn.functional import cosine_similarity as torch_cosine_similarity
+
+
+class CosineSimilarity:
+    """
+    Compute the average cosine similarity between two sets of features.
+    Matches the evaluation logic in distill.py.
+    """
+
+    def __init__(self):
+        self.reset()
+
+    def reset(self):
+        self.total_similarity = 0.0
+        self.num_samples = 0
+
+    def update(self, y_student: Tensor, y_teacher: Tensor):
+        assert (
+            y_student.size() == y_teacher.size()
+        ), "y_student and y_teacher must have the same dimensions."
+
+        similarity = torch_cosine_similarity(y_student.flatten(1), y_teacher.flatten(1))
+
+        self.total_similarity += similarity.sum().item()
+        self.num_samples += y_student.size(0)
+
+    def compute(self) -> Tensor:
+        assert self.num_samples > 0, "No samples have been added."
+
+        score = torch.tensor(self.total_similarity / self.num_samples)
+
+        return score
+
 
 class LinearCKA:
     """
@@ -17,7 +52,7 @@ class LinearCKA:
         self.teacher_sum = None
         self.num_samples = 0
 
-    def update(self, y_student: torch.Tensor, y_teacher: torch.Tensor):
+    def update(self, y_student: Tensor, y_teacher: Tensor):
         assert (
             y_student.size() == y_teacher.size()
         ), "y_student and y_teacher must have the same dimensions."
@@ -51,7 +86,7 @@ class LinearCKA:
 
         self.num_samples += y_student.size(0)
 
-    def compute(self) -> torch.Tensor:
+    def compute(self) -> Tensor:
         assert self.student_teacher_cross is not None, "student_teacher_cross is None."
         assert self.student_gram is not None, "student_gram is None."
         assert self.teacher_gram is not None, "teacher_gram is None."
@@ -81,7 +116,9 @@ class LinearCKA:
         centered_student_gram_squared = centered_student_gram.square().sum()
         centered_teacher_gram_squared = centered_teacher_gram.square().sum()
 
-        denominator = (centered_student_gram_squared * centered_teacher_gram_squared).sqrt()
+        denominator = (
+            centered_student_gram_squared * centered_teacher_gram_squared
+        ).sqrt()
 
         score = centered_cross_squared / denominator
 

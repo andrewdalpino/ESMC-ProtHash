@@ -12,7 +12,8 @@ from torch.backends.mps import is_available as mps_is_available
 from torch.amp import autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.nn import MSELoss
-from torch.nn.functional import cosine_similarity
+
+from metrics import CosineSimilarity
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -206,6 +207,11 @@ def main():
 
     student.train()
 
+    stage1_cosine_similarity_metric = CosineSimilarity()
+    stage2_cosine_similarity_metric = CosineSimilarity()
+    stage3_cosine_similarity_metric = CosineSimilarity()
+    stage4_cosine_similarity_metric = CosineSimilarity()
+
     new_progress_bar = partial(
         tqdm,
         total=args.gradient_accumulation_steps,
@@ -290,13 +296,6 @@ def main():
             if step % args.eval_interval == 0:
                 student.eval()
 
-                total_stage1_cosine_similarity = 0.0
-                total_stage2_cosine_similarity = 0.0
-                total_stage3_cosine_similarity = 0.0
-                total_stage4_cosine_similarity = 0.0
-
-                num_eval_samples = 0
-
                 for x in tqdm(test_loader, desc="Testing", leave=False):
                     x = x.to(args.device, non_blocking=True)
 
@@ -312,45 +311,22 @@ def main():
                         student.embed_teacher(x)
                     )
 
-                    y1_cosine_similarity = cosine_similarity(
-                        y1_student.flatten(1), y1_teacher.flatten(1)
-                    )
-
-                    y2_cosine_similarity = cosine_similarity(
-                        y2_student.flatten(1), y2_teacher.flatten(1)
-                    )
-
-                    y3_cosine_similarity = cosine_similarity(
-                        y3_student.flatten(1), y3_teacher.flatten(1)
-                    )
-
-                    y4_cosine_similarity = cosine_similarity(
-                        y4_student.flatten(1), y4_teacher.flatten(1)
-                    )
-
-                    n = x.size(0)
-
-                    total_stage1_cosine_similarity += y1_cosine_similarity.sum().item()
-                    total_stage2_cosine_similarity += y2_cosine_similarity.sum().item()
-                    total_stage3_cosine_similarity += y3_cosine_similarity.sum().item()
-                    total_stage4_cosine_similarity += y4_cosine_similarity.sum().item()
-
-                    num_eval_samples += n
+                    stage1_cosine_similarity_metric.update(y1_student, y1_teacher)
+                    stage2_cosine_similarity_metric.update(y2_student, y2_teacher)
+                    stage3_cosine_similarity_metric.update(y3_student, y3_teacher)
+                    stage4_cosine_similarity_metric.update(y4_student, y4_teacher)
 
                 average_stage1_cosine_similarity = (
-                    total_stage1_cosine_similarity / num_eval_samples
+                    stage1_cosine_similarity_metric.compute()
                 )
-
                 average_stage2_cosine_similarity = (
-                    total_stage2_cosine_similarity / num_eval_samples
+                    stage2_cosine_similarity_metric.compute()
                 )
-
                 average_stage3_cosine_similarity = (
-                    total_stage3_cosine_similarity / num_eval_samples
+                    stage3_cosine_similarity_metric.compute()
                 )
-
                 average_stage4_cosine_similarity = (
-                    total_stage4_cosine_similarity / num_eval_samples
+                    stage4_cosine_similarity_metric.compute()
                 )
 
                 logger.add_scalar(
@@ -375,6 +351,11 @@ def main():
                     f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.5f}, "
                     f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f}"
                 )
+
+                stage1_cosine_similarity_metric.reset()
+                stage2_cosine_similarity_metric.reset()
+                stage3_cosine_similarity_metric.reset()
+                stage4_cosine_similarity_metric.reset()
 
                 student.train()
 
