@@ -13,7 +13,7 @@ from torch.amp import autocast
 from torch.nn.utils import clip_grad_norm_
 from torch.nn import MSELoss
 
-from metrics import CosineSimilarity
+from metrics import CosineSimilarity, LinearCKA
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -22,6 +22,8 @@ from esm.models.esmc import ESMC
 
 from src.prothash.model import ProtHash
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
+from loss import WeightedMultistageLoss
+
 from tqdm import tqdm
 
 AVAILABLE_TEACHERS = {"esmc_300m", "esmc_600m"}
@@ -52,6 +54,10 @@ def main():
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
     parser.add_argument("--max_steps", default=10000, type=int)
+    parser.add_argument("--stage_1_loss_weight", default=1.0, type=float)
+    parser.add_argument("--stage_2_loss_weight", default=1.5, type=float)
+    parser.add_argument("--stage_3_loss_weight", default=2.0, type=float)
+    parser.add_argument("--stage_4_loss_weight", default=2.5, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=16, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
@@ -191,6 +197,17 @@ def main():
 
     l2_loss_function = MSELoss()
 
+    combined_loss_function = WeightedMultistageLoss(
+        [
+            args.stage_1_loss_weight,
+            args.stage_2_loss_weight,
+            args.stage_3_loss_weight,
+            args.stage_4_loss_weight,
+        ]
+    )
+
+    combined_loss_function = combined_loss_function.to(args.device)
+
     optimizer = AdamW(student.parameters(), lr=args.learning_rate)
 
     step = 1
@@ -211,6 +228,11 @@ def main():
     stage2_cosine_similarity_metric = CosineSimilarity()
     stage3_cosine_similarity_metric = CosineSimilarity()
     stage4_cosine_similarity_metric = CosineSimilarity()
+
+    stage1_linear_cka_metric = LinearCKA()
+    stage2_linear_cka_metric = LinearCKA()
+    stage3_linear_cka_metric = LinearCKA()
+    stage4_linear_cka_metric = LinearCKA()
 
     new_progress_bar = partial(
         tqdm,
@@ -247,7 +269,9 @@ def main():
             stage3_loss = l2_loss_function.forward(y3_student, y3_teacher)
             stage4_loss = l2_loss_function.forward(y4_student, y4_teacher)
 
-            combined_loss = stage1_loss + stage2_loss + stage3_loss + stage4_loss
+            combined_loss = combined_loss_function.forward(
+                torch.stack([stage1_loss, stage2_loss, stage3_loss, stage4_loss])
+            )
 
             scaled_loss = combined_loss / args.gradient_accumulation_steps
 
@@ -293,6 +317,13 @@ def main():
                 f"Gradient Norm: {gradient_norm:.5f}",
             )
 
+            total_stage1_l2_loss = 0.0
+            total_stage2_l2_loss = 0.0
+            total_stage3_l2_loss = 0.0
+            total_stage4_l2_loss = 0.0
+
+            num_batches = 0
+
             if step % args.eval_interval == 0:
                 student.eval()
 
@@ -316,18 +347,31 @@ def main():
                     stage3_cosine_similarity_metric.update(y3_student, y3_teacher)
                     stage4_cosine_similarity_metric.update(y4_student, y4_teacher)
 
+                    stage1_linear_cka_metric.update(y1_student, y1_teacher)
+                    stage2_linear_cka_metric.update(y2_student, y2_teacher)
+                    stage3_linear_cka_metric.update(y3_student, y3_teacher)
+                    stage4_linear_cka_metric.update(y4_student, y4_teacher)
+
                 average_stage1_cosine_similarity = (
                     stage1_cosine_similarity_metric.compute()
                 )
+
                 average_stage2_cosine_similarity = (
                     stage2_cosine_similarity_metric.compute()
                 )
+
                 average_stage3_cosine_similarity = (
                     stage3_cosine_similarity_metric.compute()
                 )
+
                 average_stage4_cosine_similarity = (
                     stage4_cosine_similarity_metric.compute()
                 )
+
+                average_stage1_linear_cka = stage1_linear_cka_metric.compute()
+                average_stage2_linear_cka = stage2_linear_cka_metric.compute()
+                average_stage3_linear_cka = stage3_linear_cka_metric.compute()
+                average_stage4_linear_cka = stage4_linear_cka_metric.compute()
 
                 logger.add_scalar(
                     "Stage 1 Cosine Similarity", average_stage1_cosine_similarity, step
@@ -345,17 +389,34 @@ def main():
                     "Stage 4 Cosine Similarity", average_stage4_cosine_similarity, step
                 )
 
+                logger.add_scalar("Stage 1 CKA", average_stage1_linear_cka, step)
+                logger.add_scalar("Stage 2 CKA", average_stage2_linear_cka, step)
+                logger.add_scalar("Stage 3 CKA", average_stage3_linear_cka, step)
+                logger.add_scalar("Stage 4 CKA", average_stage4_linear_cka, step)
+
                 print(
                     f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.5f}, "
                     f"Stage 2 Cosine Similarity: {average_stage2_cosine_similarity:.5f}, "
                     f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.5f}, "
-                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f}"
+                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f}, "
+                )
+
+                print(
+                    f"Stage 1 CKA: {average_stage1_linear_cka:.5f}, "
+                    f"Stage 2 CKA: {average_stage2_linear_cka:.5f}, "
+                    f"Stage 3 CKA: {average_stage3_linear_cka:.5f}, "
+                    f"Stage 4 CKA: {average_stage4_linear_cka:.5f}"
                 )
 
                 stage1_cosine_similarity_metric.reset()
                 stage2_cosine_similarity_metric.reset()
                 stage3_cosine_similarity_metric.reset()
                 stage4_cosine_similarity_metric.reset()
+
+                stage1_linear_cka_metric.reset()
+                stage2_linear_cka_metric.reset()
+                stage3_linear_cka_metric.reset()
+                stage4_linear_cka_metric.reset()
 
                 student.train()
 
@@ -375,13 +436,6 @@ def main():
                 break
 
             step += 1
-
-            total_stage1_l2_loss = 0.0
-            total_stage2_l2_loss = 0.0
-            total_stage3_l2_loss = 0.0
-            total_stage4_l2_loss = 0.0
-
-            num_batches = 0
 
             progress_bar = new_progress_bar(desc=f"Step {step:,}")
 

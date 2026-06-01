@@ -57,6 +57,9 @@ class LinearCKA:
             y_student.size() == y_teacher.size()
         ), "y_student and y_teacher must have the same dimensions."
 
+        y_student = y_student.flatten(0, -2).float()
+        y_teacher = y_teacher.flatten(0, -2).float()
+
         if self.student_teacher_cross is None:
             self.student_teacher_cross = y_student.T @ y_teacher
 
