@@ -348,8 +348,8 @@ def main():
                     y3_teacher = out_teacher.hidden_states[anchor_points[2]]
                     y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-                    y1_student, y2_student, y3_student, y4_student = (
-                        student.embed_teacher(x)
+                    y1_student, y2_student, y3_student, y4_student = student.embed_esmc(
+                        x
                     )
 
                     stage1_cosine_similarity_metric.update(y1_student, y1_teacher)

@@ -155,7 +155,7 @@ class ProtHash(Module, PyTorchModelHubMixin):
 
         return z1, z2, z3, z4
 
-    def forward_with_adapters(self, x: Tensor) -> Tensor:
+    def forward_with_adapters(self, x: Tensor) -> tuple[Tensor, ...]:
         z1, z2, z3, z4 = self.forward(x)
 
         z1 = self.adapter1(z1)
@@ -166,7 +166,7 @@ class ProtHash(Module, PyTorchModelHubMixin):
         return z1, z2, z3, z4
 
     @torch.inference_mode()
-    def embed_native(self, x: Tensor) -> tuple[Tensor, ...]:
+    def embed(self, x: Tensor) -> tuple[Tensor, ...]:
         """
         Output the contextual embeddings of the input sequence in native embedding dimensionality.
 
@@ -182,7 +182,7 @@ class ProtHash(Module, PyTorchModelHubMixin):
         return z1, z2, z3, z4
 
     @torch.inference_mode()
-    def embed_teacher(self, x: Tensor) -> tuple[Tensor, ...]:
+    def embed_esmc(self, x: Tensor) -> tuple[Tensor, ...]:
         """
         Output the contextual embeddings of the input sequence in the teacher's dimensionality.
 
@@ -210,7 +210,7 @@ class ONNXModelNative(Module):
         self.model = model
 
     def forward(self, x: Tensor) -> Tensor:
-        _, _, _, z4 = self.model.embed_native(x)
+        _, _, _, z4 = self.model.embed(x)
 
         return z4
 
@@ -227,7 +227,7 @@ class ONNXModelTeacher(Module):
         self.model = model
 
     def forward(self, x: Tensor) -> Tensor:
-        _, _, _, z4 = self.model.embed_teacher(x)
+        _, _, _, z4 = self.model.embed_esmc(x)
 
         return z4
 
@@ -278,11 +278,16 @@ class Encoder(Module):
 
         self.checkpoint = partial(torch_checkpoint, use_reentrant=False)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x: Tensor) -> tuple[Tensor, ...]:
         z1 = self.checkpoint(self.stage1, x)
         z2 = self.checkpoint(self.stage2, z1)
         z3 = self.checkpoint(self.stage3, z2)
         z4 = self.checkpoint(self.stage4, z3)
+
+        assert z1 is not None, "Checkpointing failed to return an output for stage1."
+        assert z2 is not None, "Checkpointing failed to return an output for stage2."
+        assert z3 is not None, "Checkpointing failed to return an output for stage3."
+        assert z4 is not None, "Checkpointing failed to return an output for stage4."
 
         return z1, z2, z3, z4
 
