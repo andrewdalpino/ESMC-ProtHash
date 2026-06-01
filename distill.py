@@ -408,7 +408,7 @@ def main():
                     f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.5f}, "
                     f"Stage 2 Cosine Similarity: {average_stage2_cosine_similarity:.5f}, "
                     f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.5f}, "
-                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f}, "
+                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f} "
                 )
 
                 print(
