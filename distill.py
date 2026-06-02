@@ -355,11 +355,8 @@ def main():
                     )
 
                     stage1_cosine_similarity_metric.update(y1_student, y1_teacher, mask)
-
                     stage2_cosine_similarity_metric.update(y2_student, y2_teacher, mask)
-
                     stage3_cosine_similarity_metric.update(y3_student, y3_teacher, mask)
-
                     stage4_cosine_similarity_metric.update(y4_student, y4_teacher, mask)
 
                     stage1_linear_cka_metric.update(y1_student, y1_teacher, mask)
@@ -383,10 +380,21 @@ def main():
                     stage4_cosine_similarity_metric.compute()
                 )
 
-                average_stage1_linear_cka = stage1_linear_cka_metric.compute()
-                average_stage2_linear_cka = stage2_linear_cka_metric.compute()
-                average_stage3_linear_cka = stage3_linear_cka_metric.compute()
-                average_stage4_linear_cka = stage4_linear_cka_metric.compute()
+                average_stage1_linear_cka = stage1_linear_cka_metric.compute(
+                    verbose=True
+                )
+
+                average_stage2_linear_cka = stage2_linear_cka_metric.compute(
+                    verbose=True
+                )
+
+                average_stage3_linear_cka = stage3_linear_cka_metric.compute(
+                    verbose=True
+                )
+
+                average_stage4_linear_cka = stage4_linear_cka_metric.compute(
+                    verbose=True
+                )
 
                 logger.add_scalar(
                     "Stage 1 Cosine Similarity", average_stage1_cosine_similarity, step

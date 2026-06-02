@@ -116,10 +116,10 @@ class LinearCKA:
         centered_student_gram_squared = centered_student_gram.square().sum()
         centered_teacher_gram_squared = centered_teacher_gram.square().sum()
 
-        centered_both_squared = (
-            centered_student_gram_squared * centered_teacher_gram_squared
+        denominator = (
+            centered_student_gram_squared.sqrt() * centered_teacher_gram_squared.sqrt()
         )
 
-        score = centered_cross_squared / centered_both_squared.sqrt()
+        score = centered_cross_squared / denominator
 
         return score
