@@ -14,7 +14,7 @@ class CosineSimilarity:
         self.reset()
 
     def reset(self):
-        self.total_similarity = torch.tensor(0.0)
+        self.total_similarity = 0.0
         self.num_samples = 0
 
     def update(self, y_student: Tensor, y_teacher: Tensor):
@@ -24,10 +24,10 @@ class CosineSimilarity:
 
         similarity = torch_cosine_similarity(y_student, y_teacher, dim=-1)
 
-        self.total_similarity += similarity.sum()
+        self.total_similarity += similarity.sum().item()
         self.num_samples += similarity.numel()
 
-    def compute(self) -> Tensor:
+    def compute(self) -> float:
         assert self.num_samples > 0, "No samples have been added."
 
         score = self.total_similarity / self.num_samples

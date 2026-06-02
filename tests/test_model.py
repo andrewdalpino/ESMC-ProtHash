@@ -34,7 +34,9 @@ class TestProtHash(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(42)
         self.model = ProtHash(**SMALL_CONFIG)
-        self.x = torch.randint(1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH))
+        self.x = torch.randint(
+            1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH)
+        )
 
     def test_default_construction(self):
         model = ProtHash(**SMALL_CONFIG)
@@ -42,7 +44,9 @@ class TestProtHash(unittest.TestCase):
         self.assertEqual(model.padding_index, SMALL_CONFIG["padding_index"])
         self.assertEqual(model.context_length, SMALL_CONFIG["context_length"])
         self.assertEqual(model.teacher_dimensions, SMALL_CONFIG["teacher_dimensions"])
-        self.assertEqual(model.embedding_dimensions, SMALL_CONFIG["embedding_dimensions"])
+        self.assertEqual(
+            model.embedding_dimensions, SMALL_CONFIG["embedding_dimensions"]
+        )
 
     def test_construction_without_adapters(self):
         dims = SMALL_CONFIG["embedding_dimensions"]
@@ -71,7 +75,9 @@ class TestProtHash(unittest.TestCase):
         self.assertEqual(z4.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
 
     def test_forward_sequence_too_long_raises_error(self):
-        long_x = torch.randint(1, SMALL_CONFIG["vocabulary_size"], (1, SMALL_CONFIG["context_length"] + 1))
+        long_x = torch.randint(
+            1, SMALL_CONFIG["vocabulary_size"], (1, SMALL_CONFIG["context_length"] + 1)
+        )
         with self.assertRaises(AssertionError):
             self.model.forward(long_x)
 
@@ -138,7 +144,9 @@ class TestONNXModelNative(unittest.TestCase):
         torch.manual_seed(42)
         self.model = ProtHash(**SMALL_CONFIG)
         self.onnx_model = ONNXModelNative(self.model)
-        self.x = torch.randint(1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH))
+        self.x = torch.randint(
+            1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH)
+        )
 
     def test_forward(self):
         z = self.onnx_model.forward(self.x)
@@ -151,7 +159,9 @@ class TestONNXModelTeacher(unittest.TestCase):
         torch.manual_seed(42)
         self.model = ProtHash(**SMALL_CONFIG)
         self.onnx_model = ONNXModelTeacher(self.model)
-        self.x = torch.randint(1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH))
+        self.x = torch.randint(
+            1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH)
+        )
 
     def test_forward(self):
         z = self.onnx_model.forward(self.x)
