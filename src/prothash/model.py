@@ -346,6 +346,9 @@ class SelfAttention(Module):
         self.k_proj = Linear(embedding_dimensions, embedding_dimensions, bias=False)
         self.v_proj = Linear(embedding_dimensions, embedding_dimensions, bias=False)
 
+        self.q_norm = RMSNorm(head_dimensions)
+        self.k_norm = RMSNorm(head_dimensions)
+
         self.out_proj = Linear(embedding_dimensions, embedding_dimensions, bias=False)
 
         scale = 1.0 / sqrt(head_dimensions)
@@ -365,6 +368,9 @@ class SelfAttention(Module):
         q = q.view(b, t, self.num_heads, self.head_dimensions).transpose(1, 2)
         k = k.view(b, t, self.num_heads, self.head_dimensions).transpose(1, 2)
         v = v.view(b, t, self.num_heads, self.head_dimensions).transpose(1, 2)
+
+        q = self.q_norm.forward(q)
+        k = self.k_norm.forward(k)
 
         q, k = self.position_embeddings.forward(q, k)
 

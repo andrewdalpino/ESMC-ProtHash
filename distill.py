@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--quantization_aware_training", action="store_true")
     parser.add_argument("--quant_group_size", default=64, type=int)
     parser.add_argument("--learning_rate", default=1e-4, type=float)
-    parser.add_argument("--max_gradient_norm", default=100.0, type=float)
+    parser.add_argument("--max_gradient_norm", default=1000.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
     parser.add_argument("--max_steps", default=10000, type=int)
@@ -248,10 +248,10 @@ def main():
 
     print("Distilling ...")
 
+    progress_bar = new_progress_bar(desc=f"Step {step:,}")
+
     for index, x in enumerate(train_loader, start=1):
         x = x.to(args.device, non_blocking=True)
-
-        progress_bar = new_progress_bar(desc=f"Step {step:,}")
 
         with amp_context:
             with torch.no_grad():
@@ -446,6 +446,8 @@ def main():
                 break
 
             step += 1
+
+            progress_bar = new_progress_bar(desc=f"Step {step:,}")
 
     logger.close()
 
