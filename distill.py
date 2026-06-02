@@ -20,7 +20,7 @@ from esm.models.esmc import ESMC
 
 from src.prothash.model import ESMCProtHash
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
-from loss import MaskedMSELoss, WeightedMultistageLoss
+from loss import MaskedMSELoss, WeightedMultistageLoss, DecomposedNormalizedMSE
 
 from tqdm import tqdm
 
@@ -195,6 +195,7 @@ def main():
     print(f"Number of parameters: {student.num_params:,}")
 
     l2_loss_function = MaskedMSELoss()
+    decomposed_l2_loss_function = DecomposedNormalizedMSE()
 
     combined_loss_function = WeightedMultistageLoss(
         [
@@ -272,8 +273,14 @@ def main():
 
             stage1_loss = l2_loss_function.forward(y1_student, y1_teacher, mask)
             stage2_loss = l2_loss_function.forward(y2_student, y2_teacher, mask)
-            stage3_loss = l2_loss_function.forward(y3_student, y3_teacher, mask)
-            stage4_loss = l2_loss_function.forward(y4_student, y4_teacher, mask)
+
+            stage3_loss = decomposed_l2_loss_function.forward(
+                y3_student, y3_teacher, mask
+            )
+
+            stage4_loss = decomposed_l2_loss_function.forward(
+                y4_student, y4_teacher, mask
+            )
 
             combined_loss = combined_loss_function.forward(
                 torch.stack([stage1_loss, stage2_loss, stage3_loss, stage4_loss])
@@ -380,21 +387,10 @@ def main():
                     stage4_cosine_similarity_metric.compute()
                 )
 
-                average_stage1_linear_cka = stage1_linear_cka_metric.compute(
-                    verbose=True
-                )
-
-                average_stage2_linear_cka = stage2_linear_cka_metric.compute(
-                    verbose=True
-                )
-
-                average_stage3_linear_cka = stage3_linear_cka_metric.compute(
-                    verbose=True
-                )
-
-                average_stage4_linear_cka = stage4_linear_cka_metric.compute(
-                    verbose=True
-                )
+                average_stage1_linear_cka = stage1_linear_cka_metric.compute()
+                average_stage2_linear_cka = stage2_linear_cka_metric.compute()
+                average_stage3_linear_cka = stage3_linear_cka_metric.compute()
+                average_stage4_linear_cka = stage4_linear_cka_metric.compute()
 
                 logger.add_scalar(
                     "Stage 1 Cosine Similarity", average_stage1_cosine_similarity, step
