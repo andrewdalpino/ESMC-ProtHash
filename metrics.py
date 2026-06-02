@@ -28,7 +28,7 @@ class CosineSimilarity:
         self.num_samples += similarity.numel()
 
     def compute(self) -> float:
-        assert self.num_samples > 0, "No samples have been added."
+        assert self.num_samples > 0, "No updates have been made yet."
 
         score = self.total_similarity / self.num_samples
 

@@ -30,9 +30,9 @@ from torchao.quantization.qat import (
 from huggingface_hub import PyTorchModelHubMixin
 
 
-class ProtHash(Module, PyTorchModelHubMixin):
+class ESMCProtHash(Module, PyTorchModelHubMixin):
     """
-    An encoder-only transformer model for protein sequence embedding with an adapter head
+    An encoder-only transformer model for protein sequence embedding with adapter heads
     designed for knowledge distillation.
     """
 
@@ -96,9 +96,7 @@ class ProtHash(Module, PyTorchModelHubMixin):
     def freeze_weights(self) -> None:
         """Freeze all model parameters."""
 
-        for module in self.modules():
-            for param in module.parameters():
-                param.requires_grad = False
+        self.requires_grad_(False)
 
     def add_fake_quantized_tensors(self, group_size: int) -> None:
         """Prepare the model for quantization-aware training."""
@@ -204,32 +202,32 @@ class ONNXModelNative(Module):
     native embedding dimensionality.
     """
 
-    def __init__(self, model: ProtHash):
+    def __init__(self, model: ESMCProtHash):
         super().__init__()
 
         self.model = model
 
-    def forward(self, x: Tensor) -> Tensor:
-        _, _, _, z4 = self.model.embed(x)
+    def forward(self, x: Tensor) -> tuple[Tensor, ...]:
+        z1, z2, z3, z4 = self.model.embed(x)
 
-        return z4
+        return z1, z2, z3, z4
 
 
-class ONNXModelTeacher(Module):
+class ONNXModelESMC(Module):
     """
     A wrapper class for exporting the ProtHash model to ONNX format with output in
     its teacher's embedding dimensionality.
     """
 
-    def __init__(self, model: ProtHash):
+    def __init__(self, model: ESMCProtHash):
         super().__init__()
 
         self.model = model
 
-    def forward(self, x: Tensor) -> Tensor:
-        _, _, _, z4 = self.model.embed_esmc(x)
+    def forward(self, x: Tensor) -> tuple[Tensor, ...]:
+        z1, z2, z3, z4 = self.model.embed_esmc(x)
 
-        return z4
+        return z1, z2, z3, z4
 
 
 class Encoder(Module):
@@ -283,11 +281,6 @@ class Encoder(Module):
         z2 = self.checkpoint(self.stage2, z1)
         z3 = self.checkpoint(self.stage3, z2)
         z4 = self.checkpoint(self.stage4, z3)
-
-        assert z1 is not None, "Checkpointing failed to return an output for stage1."
-        assert z2 is not None, "Checkpointing failed to return an output for stage2."
-        assert z3 is not None, "Checkpointing failed to return an output for stage3."
-        assert z4 is not None, "Checkpointing failed to return an output for stage4."
 
         return z1, z2, z3, z4
 

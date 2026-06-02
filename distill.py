@@ -20,7 +20,7 @@ from torch.utils.tensorboard import SummaryWriter
 from esm.tokenization import EsmSequenceTokenizer
 from esm.models.esmc import ESMC
 
-from src.prothash.model import ProtHash
+from src.prothash.model import ESMCProtHash
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
 from loss import WeightedMultistageLoss
 
@@ -187,7 +187,7 @@ def main():
         "num_encoder_layers": args.num_encoder_layers,
     }
 
-    student = ProtHash(**model_args)
+    student = ESMCProtHash(**model_args)
 
     if args.quantization_aware_training:
         student.add_fake_quantized_tensors(args.quant_group_size)
@@ -248,10 +248,10 @@ def main():
 
     print("Distilling ...")
 
-    progress_bar = new_progress_bar(desc=f"Step {step:,}")
-
     for index, x in enumerate(train_loader, start=1):
         x = x.to(args.device, non_blocking=True)
+
+        progress_bar = new_progress_bar(desc=f"Step {step:,}")
 
         with amp_context:
             with torch.no_grad():
@@ -405,16 +405,16 @@ def main():
                 logger.add_scalar("Stage 4 CKA", average_stage4_linear_cka, step)
 
                 print(
-                    f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.5f}, "
-                    f"Stage 2 Cosine Similarity: {average_stage2_cosine_similarity:.5f}, "
-                    f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.5f}, "
-                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f} "
+                    f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.5f},"
+                    f"Stage 2 Cosine Similarity: {average_stage2_cosine_similarity:.5f},"
+                    f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.5f},"
+                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f}"
                 )
 
                 print(
-                    f"Stage 1 CKA: {average_stage1_linear_cka:.5f}, "
-                    f"Stage 2 CKA: {average_stage2_linear_cka:.5f}, "
-                    f"Stage 3 CKA: {average_stage3_linear_cka:.5f}, "
+                    f"Stage 1 CKA: {average_stage1_linear_cka:.5f},"
+                    f"Stage 2 CKA: {average_stage2_linear_cka:.5f},"
+                    f"Stage 3 CKA: {average_stage3_linear_cka:.5f},"
                     f"Stage 4 CKA: {average_stage4_linear_cka:.5f}"
                 )
 
@@ -446,8 +446,6 @@ def main():
                 break
 
             step += 1
-
-            progress_bar = new_progress_bar(desc=f"Step {step:,}")
 
     logger.close()
 
