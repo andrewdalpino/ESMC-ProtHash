@@ -316,11 +316,11 @@ def main():
 
             print(
                 f"Step {step:,}:",
-                f"Stage 1 L2: {average_stage1_l2_loss:.5f},",
-                f"Stage 2 L2: {average_stage2_l2_loss:.5f},",
-                f"Stage 3 L2: {average_stage3_l2_loss:.5f},",
-                f"Stage 4 L2: {average_stage4_l2_loss:.5f},",
-                f"Gradient Norm: {gradient_norm:.5f}",
+                f"Stage 1 L2: {average_stage1_l2_loss:.4f},",
+                f"Stage 2 L2: {average_stage2_l2_loss:.4f},",
+                f"Stage 3 L2: {average_stage3_l2_loss:.4f},",
+                f"Stage 4 L2: {average_stage4_l2_loss:.4f},",
+                f"Gradient Norm: {gradient_norm:.3f}",
             )
 
             total_stage1_l2_loss = 0.0
@@ -405,17 +405,17 @@ def main():
                 logger.add_scalar("Stage 4 CKA", average_stage4_linear_cka, step)
 
                 print(
-                    f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.5f},"
-                    f"Stage 2 Cosine Similarity: {average_stage2_cosine_similarity:.5f},"
-                    f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.5f},"
-                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.5f}"
+                    f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.4f},",
+                    f"Stage 2 Cosine Similarity: {average_stage2_cosine_similarity:.4f},",
+                    f"Stage 3 Cosine Similarity: {average_stage3_cosine_similarity:.4f},",
+                    f"Stage 4 Cosine Similarity: {average_stage4_cosine_similarity:.4f}",
                 )
 
                 print(
-                    f"Stage 1 CKA: {average_stage1_linear_cka:.5f},"
-                    f"Stage 2 CKA: {average_stage2_linear_cka:.5f},"
-                    f"Stage 3 CKA: {average_stage3_linear_cka:.5f},"
-                    f"Stage 4 CKA: {average_stage4_linear_cka:.5f}"
+                    f"Stage 1 CKA: {average_stage1_linear_cka:.4f},",
+                    f"Stage 2 CKA: {average_stage2_linear_cka:.4f},",
+                    f"Stage 3 CKA: {average_stage3_linear_cka:.4f},",
+                    f"Stage 4 CKA: {average_stage4_linear_cka:.4f}",
                 )
 
                 stage1_cosine_similarity_metric.reset()
