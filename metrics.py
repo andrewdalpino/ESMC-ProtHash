@@ -1,5 +1,3 @@
-import torch
-
 from torch import Tensor
 
 from torch.nn.functional import cosine_similarity as torch_cosine_similarity
@@ -17,15 +15,17 @@ class CosineSimilarity:
         self.total_similarity = 0.0
         self.num_samples = 0
 
-    def update(self, y_student: Tensor, y_teacher: Tensor):
+    def update(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor):
         assert (
             y_student.size() == y_teacher.size()
         ), "y_student and y_teacher must have the same dimensions."
 
         similarity = torch_cosine_similarity(y_student, y_teacher, dim=-1)
 
+        similarity = similarity * mask
+
         self.total_similarity += similarity.sum().item()
-        self.num_samples += similarity.numel()
+        self.num_samples += mask.sum().item()
 
     def compute(self) -> float:
         assert self.num_samples > 0, "No updates have been made yet."
@@ -51,13 +51,18 @@ class LinearCKA:
         self.teacher_sum = None
         self.num_samples = 0
 
-    def update(self, y_student: Tensor, y_teacher: Tensor):
+    def update(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor):
         assert (
             y_student.size() == y_teacher.size()
         ), "y_student and y_teacher must have the same dimensions."
 
         y_student = y_student.flatten(0, -2).float()
         y_teacher = y_teacher.flatten(0, -2).float()
+
+        mask = mask.flatten().bool()
+
+        y_student = y_student[mask]
+        y_teacher = y_teacher[mask]
 
         if self.student_teacher_cross is None:
             self.student_teacher_cross = y_student.T @ y_teacher

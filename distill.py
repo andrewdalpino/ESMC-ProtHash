@@ -11,8 +11,6 @@ from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.backends.mps import is_available as mps_is_available
 from torch.amp import autocast
 from torch.nn.utils import clip_grad_norm_
-from torch.nn import MSELoss
-
 from metrics import CosineSimilarity, LinearCKA
 
 from torch.utils.tensorboard import SummaryWriter
@@ -22,7 +20,7 @@ from esm.models.esmc import ESMC
 
 from src.prothash.model import ESMCProtHash
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
-from loss import WeightedMultistageLoss
+from loss import MaskedMSELoss, WeightedMultistageLoss
 
 from tqdm import tqdm
 
@@ -196,7 +194,7 @@ def main():
 
     print(f"Number of parameters: {student.num_params:,}")
 
-    l2_loss_function = MSELoss()
+    l2_loss_function = MaskedMSELoss()
 
     combined_loss_function = WeightedMultistageLoss(
         [
@@ -253,6 +251,8 @@ def main():
     for index, x in enumerate(train_loader, start=1):
         x = x.to(args.device, non_blocking=True)
 
+        mask = x != tokenizer.pad_token_id
+
         with amp_context:
             with torch.no_grad():
                 out_teacher = teacher.forward(x)
@@ -270,10 +270,10 @@ def main():
             y3_teacher = out_teacher.hidden_states[anchor_points[2]]
             y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-            stage1_loss = l2_loss_function.forward(y1_student, y1_teacher)
-            stage2_loss = l2_loss_function.forward(y2_student, y2_teacher)
-            stage3_loss = l2_loss_function.forward(y3_student, y3_teacher)
-            stage4_loss = l2_loss_function.forward(y4_student, y4_teacher)
+            stage1_loss = l2_loss_function.forward(y1_student, y1_teacher, mask)
+            stage2_loss = l2_loss_function.forward(y2_student, y2_teacher, mask)
+            stage3_loss = l2_loss_function.forward(y3_student, y3_teacher, mask)
+            stage4_loss = l2_loss_function.forward(y4_student, y4_teacher, mask)
 
             combined_loss = combined_loss_function.forward(
                 torch.stack([stage1_loss, stage2_loss, stage3_loss, stage4_loss])
@@ -336,6 +336,8 @@ def main():
                 for x in tqdm(test_loader, desc="Testing", leave=False):
                     x = x.to(args.device, non_blocking=True)
 
+                    mask = x != tokenizer.pad_token_id
+
                     with torch.inference_mode():
                         out_teacher = teacher.forward(x)
 
@@ -352,15 +354,18 @@ def main():
                         x
                     )
 
-                    stage1_cosine_similarity_metric.update(y1_student, y1_teacher)
-                    stage2_cosine_similarity_metric.update(y2_student, y2_teacher)
-                    stage3_cosine_similarity_metric.update(y3_student, y3_teacher)
-                    stage4_cosine_similarity_metric.update(y4_student, y4_teacher)
+                    stage1_cosine_similarity_metric.update(y1_student, y1_teacher, mask)
 
-                    stage1_linear_cka_metric.update(y1_student, y1_teacher)
-                    stage2_linear_cka_metric.update(y2_student, y2_teacher)
-                    stage3_linear_cka_metric.update(y3_student, y3_teacher)
-                    stage4_linear_cka_metric.update(y4_student, y4_teacher)
+                    stage2_cosine_similarity_metric.update(y2_student, y2_teacher, mask)
+
+                    stage3_cosine_similarity_metric.update(y3_student, y3_teacher, mask)
+
+                    stage4_cosine_similarity_metric.update(y4_student, y4_teacher, mask)
+
+                    stage1_linear_cka_metric.update(y1_student, y1_teacher, mask)
+                    stage2_linear_cka_metric.update(y2_student, y2_teacher, mask)
+                    stage3_linear_cka_metric.update(y3_student, y3_teacher, mask)
+                    stage4_linear_cka_metric.update(y4_student, y4_teacher, mask)
 
                 average_stage1_cosine_similarity = (
                     stage1_cosine_similarity_metric.compute()

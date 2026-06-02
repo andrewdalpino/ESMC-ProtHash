@@ -5,6 +5,26 @@ from torch import Tensor
 from torch.nn import Module, Buffer
 
 
+class MaskedMSELoss(Module):
+    """MSE loss computed only over non-padding positions."""
+
+    def forward(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor) -> Tensor:
+        y_student = y_student.flatten(0, -2).float()
+        y_teacher = y_teacher.flatten(0, -2).float()
+
+        mask = mask.flatten().bool()
+
+        y_student = y_student[mask]
+        y_teacher = y_teacher[mask]
+
+        if y_student.size(0) == 0:
+            return torch.tensor(0.0, device=y_student.device)
+
+        loss = (y_student - y_teacher).pow(2).mean()
+
+        return loss
+
+
 class WeightedMultistageLoss(Module):
     """A multistage loss weighting where each stage contributes based on a static scalar."""
 
