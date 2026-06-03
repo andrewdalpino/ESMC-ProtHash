@@ -5,47 +5,42 @@ from torch import Tensor
 from torch.nn import Module, Buffer
 
 
-class MaskedMSELoss(Module):
-    """MSE loss computed only over non-padding positions."""
-
-    def forward(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor) -> Tensor:
-        y_student = y_student.flatten(0, -2).float()
-        y_teacher = y_teacher.flatten(0, -2).float()
-
-        mask = mask.flatten().bool()
-
-        y_student = y_student[mask]
-        y_teacher = y_teacher[mask]
-
-        if y_student.size(0) == 0:
-            return torch.tensor(0.0, device=y_student.device)
-
-        loss = (y_student - y_teacher).pow(2).mean()
-
-        return loss
-
-
 class DecomposedNormalizedMSE(Module):
-    """MSE loss decomposed into independent direction and magnitude components."""
+    """
+    MSE loss decomposed into independent direction and magnitude components and normalized.
+    """
 
-    def forward(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor) -> Tensor:
-        y_student = y_student.float()
-        y_teacher = y_teacher.float()
+    def __init__(self, epsilon: float = 1e-8):
+        super().__init__()
 
-        student_norm = y_student.norm(dim=-1, keepdim=True).clamp(min=1e-8)
-        teacher_norm = y_teacher.norm(dim=-1, keepdim=True).clamp(min=1e-8)
+        assert epsilon > 0, "Epsilon must be a positive value."
 
-        direction_loss = (y_student / student_norm - y_teacher / teacher_norm).pow(2)
-        magnitude_loss = ((student_norm - teacher_norm) / (teacher_norm + 1e-8)).pow(2)
+        self.epsilon = epsilon
+
+    def forward(
+        self, y_student: Tensor, y_teacher: Tensor, mask: Tensor
+    ) -> tuple[Tensor, Tensor]:
+        student_norm = y_student.norm(dim=-1, keepdim=True)
+        teacher_norm = y_teacher.norm(dim=-1, keepdim=True)
+
+        student_norm = student_norm.clamp(min=self.epsilon)
+        teacher_norm = teacher_norm.clamp(min=self.epsilon)
+
+        y_student_normalized = y_student / student_norm
+        y_teacher_normalized = y_teacher / teacher_norm
+
+        direction_loss = y_student_normalized - y_teacher_normalized
+        magnitude_loss = (student_norm - teacher_norm) / teacher_norm
+
+        direction_loss = direction_loss.pow(2)
+        magnitude_loss = magnitude_loss.pow(2)
 
         mask = mask.unsqueeze(-1)
 
         direction_loss = direction_loss.masked_select(mask).mean()
         magnitude_loss = magnitude_loss.masked_select(mask).mean()
 
-        loss = direction_loss + magnitude_loss
-
-        return loss
+        return direction_loss, magnitude_loss
 
 
 class WeightedMultistageLoss(Module):

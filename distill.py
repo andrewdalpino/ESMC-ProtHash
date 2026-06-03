@@ -11,7 +11,6 @@ from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.backends.mps import is_available as mps_is_available
 from torch.amp import autocast
 from torch.nn.utils import clip_grad_norm_
-from metrics import CosineSimilarity, LinearCKA
 
 from torch.utils.tensorboard import SummaryWriter
 
@@ -20,7 +19,8 @@ from esm.models.esmc import ESMC
 
 from src.prothash.model import ESMCProtHash
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
-from loss import MaskedMSELoss, WeightedMultistageLoss, DecomposedNormalizedMSE
+from loss import DecomposedNormalizedMSE, WeightedMultistageLoss
+from metrics import CosineSimilarity, LinearCKA
 
 from tqdm import tqdm
 
@@ -48,19 +48,23 @@ def main():
     parser.add_argument("--max_sequence_length", default=2048, type=int)
     parser.add_argument("--quantization_aware_training", action="store_true")
     parser.add_argument("--quant_group_size", default=64, type=int)
-    parser.add_argument("--learning_rate", default=1e-4, type=float)
-    parser.add_argument("--max_gradient_norm", default=1000.0, type=float)
+    parser.add_argument("--learning_rate", default=3e-4, type=float)
+    parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
-    parser.add_argument("--max_steps", default=10000, type=int)
-    parser.add_argument("--stage_1_loss_weight", default=0.25, type=float)
-    parser.add_argument("--stage_2_loss_weight", default=0.5, type=float)
-    parser.add_argument("--stage_3_loss_weight", default=0.75, type=float)
-    parser.add_argument("--stage_4_loss_weight", default=1.0, type=float)
+    parser.add_argument("--max_steps", default=20000, type=int)
+    parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
+    parser.add_argument("--stage1_magnitude_weight", default=0.125, type=float)
+    parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
+    parser.add_argument("--stage2_magnitude_weight", default=0.25, type=float)
+    parser.add_argument("--stage3_direction_weight", default=0.75, type=float)
+    parser.add_argument("--stage3_magnitude_weight", default=0.375, type=float)
+    parser.add_argument("--stage4_direction_weight", default=1.0, type=float)
+    parser.add_argument("--stage4_magnitude_weight", default=0.5, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=16, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
-    parser.add_argument("--num_encoder_layers", default=10, type=int)
+    parser.add_argument("--num_encoder_layers", default=12, type=int)
     parser.add_argument("--eval_interval", default=100, type=int)
     parser.add_argument("--num_eval_samples", default=5000, type=int)
     parser.add_argument("--checkpoint_interval", default=100, type=int)
@@ -194,15 +198,18 @@ def main():
 
     print(f"Number of parameters: {student.num_params:,}")
 
-    l2_loss_function = MaskedMSELoss()
-    decomposed_l2_loss_function = DecomposedNormalizedMSE()
+    loss_function = DecomposedNormalizedMSE()
 
     combined_loss_function = WeightedMultistageLoss(
         [
-            args.stage_1_loss_weight,
-            args.stage_2_loss_weight,
-            args.stage_3_loss_weight,
-            args.stage_4_loss_weight,
+            args.stage1_direction_weight,
+            args.stage1_magnitude_weight,
+            args.stage2_direction_weight,
+            args.stage2_magnitude_weight,
+            args.stage3_direction_weight,
+            args.stage3_magnitude_weight,
+            args.stage4_direction_weight,
+            args.stage4_magnitude_weight,
         ]
     )
 
@@ -240,8 +247,11 @@ def main():
         leave=False,
     )
 
-    total_stage1_l2_loss, total_stage2_l2_loss = 0.0, 0.0
-    total_stage3_l2_loss, total_stage4_l2_loss = 0.0, 0.0
+    total_stage1_direction_loss, total_stage2_direction_loss = 0.0, 0.0
+    total_stage3_direction_loss, total_stage4_direction_loss = 0.0, 0.0
+
+    total_stage1_magnitude_loss, total_stage2_magnitude_loss = 0.0, 0.0
+    total_stage3_magnitude_loss, total_stage4_magnitude_loss = 0.0, 0.0
 
     num_batches = 0
 
@@ -271,29 +281,50 @@ def main():
             y3_teacher = out_teacher.hidden_states[anchor_points[2]]
             y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-            stage1_loss = l2_loss_function.forward(y1_student, y1_teacher, mask)
-            stage2_loss = l2_loss_function.forward(y2_student, y2_teacher, mask)
+            stage1_direction_loss, stage1_magnitude_loss = loss_function.forward(
+                y1_student, y1_teacher, mask
+            )
 
-            stage3_loss = decomposed_l2_loss_function.forward(
+            stage2_direction_loss, stage2_magnitude_loss = loss_function.forward(
+                y2_student, y2_teacher, mask
+            )
+
+            stage3_direction_loss, stage3_magnitude_loss = loss_function.forward(
                 y3_student, y3_teacher, mask
             )
 
-            stage4_loss = decomposed_l2_loss_function.forward(
+            stage4_direction_loss, stage4_magnitude_loss = loss_function.forward(
                 y4_student, y4_teacher, mask
             )
 
             combined_loss = combined_loss_function.forward(
-                torch.stack([stage1_loss, stage2_loss, stage3_loss, stage4_loss])
+                torch.stack(
+                    [
+                        stage1_direction_loss,
+                        stage1_magnitude_loss,
+                        stage2_direction_loss,
+                        stage2_magnitude_loss,
+                        stage3_direction_loss,
+                        stage3_magnitude_loss,
+                        stage4_direction_loss,
+                        stage4_magnitude_loss,
+                    ]
+                )
             )
 
             scaled_loss = combined_loss / args.gradient_accumulation_steps
 
         scaled_loss.backward()
 
-        total_stage1_l2_loss += stage1_loss.item()
-        total_stage2_l2_loss += stage2_loss.item()
-        total_stage3_l2_loss += stage3_loss.item()
-        total_stage4_l2_loss += stage4_loss.item()
+        total_stage1_direction_loss += stage1_direction_loss.item()
+        total_stage2_direction_loss += stage2_direction_loss.item()
+        total_stage3_direction_loss += stage3_direction_loss.item()
+        total_stage4_direction_loss += stage4_direction_loss.item()
+
+        total_stage1_magnitude_loss += stage1_magnitude_loss.item()
+        total_stage2_magnitude_loss += stage2_magnitude_loss.item()
+        total_stage3_magnitude_loss += stage3_magnitude_loss.item()
+        total_stage4_magnitude_loss += stage4_magnitude_loss.item()
 
         num_batches += 1
 
@@ -308,32 +339,74 @@ def main():
 
             progress_bar.close()
 
-            average_stage1_l2_loss = total_stage1_l2_loss / num_batches
-            average_stage2_l2_loss = total_stage2_l2_loss / num_batches
-            average_stage3_l2_loss = total_stage3_l2_loss / num_batches
-            average_stage4_l2_loss = total_stage4_l2_loss / num_batches
+            average_stage1_direction_loss = total_stage1_direction_loss / num_batches
+            average_stage2_direction_loss = total_stage2_direction_loss / num_batches
+            average_stage3_direction_loss = total_stage3_direction_loss / num_batches
+            average_stage4_direction_loss = total_stage4_direction_loss / num_batches
+
+            average_stage1_magnitude_loss = total_stage1_magnitude_loss / num_batches
+            average_stage2_magnitude_loss = total_stage2_magnitude_loss / num_batches
+            average_stage3_magnitude_loss = total_stage3_magnitude_loss / num_batches
+            average_stage4_magnitude_loss = total_stage4_magnitude_loss / num_batches
 
             gradient_norm = norm.item()
 
-            logger.add_scalar("Stage 1 L2", average_stage1_l2_loss, step)
-            logger.add_scalar("Stage 2 L2", average_stage2_l2_loss, step)
-            logger.add_scalar("Stage 3 L2", average_stage3_l2_loss, step)
-            logger.add_scalar("Stage 4 L2", average_stage4_l2_loss, step)
-            logger.add_scalar("Gradient Norm", gradient_norm, step)
+            logger.add_scalar(
+                "Stage 1 Direction L2", average_stage1_direction_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 1 Magnitude L2", average_stage1_magnitude_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 2 Direction L2", average_stage2_direction_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 2 Magnitude L2", average_stage2_magnitude_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 3 Direction L2", average_stage3_direction_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 3 Magnitude L2", average_stage3_magnitude_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 4 Direction L2", average_stage4_direction_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 4 Magnitude L2", average_stage4_magnitude_loss, step
+            )
+
+            logger.add_scalar("Gradient Norm:", gradient_norm, step)
 
             print(
                 f"Step {step:,}:",
-                f"Stage 1 L2: {average_stage1_l2_loss:.4f},",
-                f"Stage 2 L2: {average_stage2_l2_loss:.4f},",
-                f"Stage 3 L2: {average_stage3_l2_loss:.4f},",
-                f"Stage 4 L2: {average_stage4_l2_loss:.4f},",
-                f"Gradient Norm: {gradient_norm:.3f}",
+                f"Stage 1 Direction L2: {average_stage1_direction_loss:.5f},",
+                f"Stage 1 Magnitude L2: {average_stage1_magnitude_loss:.5f},",
+                f"Stage 2 Direction L2: {average_stage2_direction_loss:.5f},",
+                f"Stage 2 Magnitude L2: {average_stage2_magnitude_loss:.5f},",
+                f"Stage 3 Direction L2: {average_stage3_direction_loss:.5f},",
+                f"Stage 3 Magnitude L2: {average_stage3_magnitude_loss:.5f},",
+                f"Stage 4 Direction L2: {average_stage4_direction_loss:.5f},",
+                f"Stage 4 Magnitude L2: {average_stage4_magnitude_loss:.5f},",
+                f"Gradient Norm: {gradient_norm:.4f}",
             )
 
-            total_stage1_l2_loss = 0.0
-            total_stage2_l2_loss = 0.0
-            total_stage3_l2_loss = 0.0
-            total_stage4_l2_loss = 0.0
+            total_stage1_direction_loss = 0.0
+            total_stage2_direction_loss = 0.0
+            total_stage3_direction_loss = 0.0
+            total_stage4_direction_loss = 0.0
+
+            total_stage1_magnitude_loss = 0.0
+            total_stage2_magnitude_loss = 0.0
+            total_stage3_magnitude_loss = 0.0
+            total_stage4_magnitude_loss = 0.0
 
             num_batches = 0
 
