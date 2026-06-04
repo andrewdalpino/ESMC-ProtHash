@@ -11,13 +11,15 @@ from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.backends.mps import is_available as mps_is_available
 from torch.amp import autocast
 from torch.nn.utils import clip_grad_norm_
-
 from torch.utils.tensorboard import SummaryWriter
+
+from torchdata.stateful_dataloader import StatefulDataLoader
 
 from esm.tokenization import EsmSequenceTokenizer
 from esm.models.esmc import ESMC
 
 from src.prothash.model import ESMCProtHash
+
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
 from loss import DecomposedNormalizedMSE, WeightedMultistageLoss
 from metrics import CosineSimilarity, LinearCKA
@@ -43,7 +45,7 @@ def main():
 
     parser.add_argument("--dataset_path", default="dataset/uniref50.fasta", type=str)
     parser.add_argument("--num_length_buckets", default=100, type=int)
-    parser.add_argument("--num_dataset_processes", default=4, type=int)
+    parser.add_argument("--num_dataset_processes", default=1, type=int)
     parser.add_argument("--min_sequence_length", default=1, type=int)
     parser.add_argument("--max_sequence_length", default=2048, type=int)
     parser.add_argument("--quantization_aware_training", action="store_true")
@@ -52,7 +54,7 @@ def main():
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
-    parser.add_argument("--max_steps", default=15000, type=int)
+    parser.add_argument("--max_steps", default=50000, type=int)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
     parser.add_argument("--stage1_magnitude_weight", default=0.125, type=float)
@@ -67,7 +69,7 @@ def main():
     parser.add_argument("--hidden_ratio", default=4, type=int)
     parser.add_argument("--num_encoder_layers", default=12, type=int)
     parser.add_argument("--eval_interval", default=200, type=int)
-    parser.add_argument("--num_eval_samples", default=8000, type=int)
+    parser.add_argument("--num_eval_samples", default=10000, type=int)
     parser.add_argument("--checkpoint_interval", default=200, type=int)
 
     parser.add_argument(
@@ -149,22 +151,27 @@ def main():
         dataset, (num_training_samples, args.num_eval_samples)
     )
 
-    new_dataloader = partial(
-        DataLoader,
-        collate_fn=dataset.collate_pad_right,
-        pin_memory="cuda" in args.device,
-        num_workers=args.num_dataset_processes,
-    )
-
     bucket_sampler = LengthBucketBatchSampler(
         training, args.batch_size, args.num_length_buckets
     )
 
-    train_loader = new_dataloader(training, batch_sampler=bucket_sampler)
+    train_loader = StatefulDataLoader(
+        training,
+        batch_sampler=bucket_sampler,
+        collate_fn=dataset.collate_pad_right,
+        pin_memory="cpu" not in args.device,
+        snapshot_every_n_steps=args.gradient_accumulation_steps,
+        num_workers=args.num_dataset_processes,
+    )
 
     sorted_length_sampler = SortedLengthBatchSampler(testing, args.batch_size)
 
-    test_loader = new_dataloader(testing, batch_sampler=sorted_length_sampler)
+    test_loader = DataLoader(
+        testing,
+        batch_sampler=sorted_length_sampler,
+        pin_memory="cpu" not in args.device,
+        num_workers=args.num_dataset_processes,
+    )
 
     teacher = ESMC.from_pretrained(args.teacher_name)
 
@@ -222,6 +229,8 @@ def main():
 
     if args.resume:
         checkpoint = torch.load(args.checkpoint_path, map_location=args.device)
+
+        train_loader.load_state_dict(checkpoint["train_loader"])
 
         student.load_state_dict(checkpoint["model"])
         optimizer.load_state_dict(checkpoint["optimizer"])
@@ -396,7 +405,7 @@ def main():
                 f"Stage 3 Magnitude L2: {average_stage3_magnitude_loss:.5f},",
                 f"Stage 4 Direction L2: {average_stage4_direction_loss:.5f},",
                 f"Stage 4 Magnitude L2: {average_stage4_magnitude_loss:.5f},",
-                f"Gradient Norm: {gradient_norm:.4f}",
+                f"Gradient Norm: {gradient_norm:.5f}",
             )
 
             total_stage1_direction_loss = 0.0
@@ -516,6 +525,7 @@ def main():
             if step % args.checkpoint_interval == 0:
                 checkpoint = {
                     "step": step,
+                    "train_loader": train_loader.state_dict(),
                     "model_args": model_args,
                     "model": student.state_dict(),
                     "optimizer": optimizer.state_dict(),

@@ -101,39 +101,17 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
     def add_fake_quantized_tensors(self, group_size: int) -> None:
         """Prepare the model for quantization-aware training."""
 
-        for module in self.modules():
-            if isinstance(module, Linear):
-                assert module.in_features % group_size == 0, (
-                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
-                    f" of layer {module}."
-                )
-
-        weight_config = FakeQuantizeConfig(torch.int8, group_size=group_size)
-
-        config = IntXQuantizationAwareTrainingConfig(weight_config=weight_config)
-
-        quantize_(self, config)
+        self.encoder.add_fake_quantized_tensors(group_size)
 
     def remove_fake_quantized_tensors(self) -> None:
         """Convert fake quantized tensors back to regular tensors."""
 
-        config = FromIntXQuantizationAwareTrainingConfig()
-
-        quantize_(self, config)
+        self.encoder.remove_fake_quantized_tensors()
 
     def quantize_weights(self, group_size: int) -> None:
         """Quantize the weights of the model."""
 
-        for module in self.modules():
-            if isinstance(module, Linear):
-                assert module.in_features % group_size == 0, (
-                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
-                    f" of layer {module}."
-                )
-
-        config = Int8WeightOnlyConfig(group_size=group_size)
-
-        quantize_(self, config)
+        self.encoder.quantize_weights(group_size)
 
     def forward(self, x: Tensor) -> tuple[Tensor, ...]:
         """
@@ -196,7 +174,7 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         return z1, z2, z3, z4
 
 
-class ONNXModelNative(Module):
+class ONNXModel(Module):
     """
     A wrapper class for exporting the ProtHash model to ONNX format with output in
     native embedding dimensionality.
@@ -270,6 +248,43 @@ class Encoder(Module):
         )
 
         self.checkpoint = lambda layer, x: layer.forward(x)
+
+    def add_fake_quantized_tensors(self, group_size: int) -> None:
+        """Prepare the model for quantization-aware training."""
+
+        for module in self.modules():
+            if isinstance(module, Linear):
+                assert module.in_features % group_size == 0, (
+                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
+                    f" of layer {module}."
+                )
+
+        weight_config = FakeQuantizeConfig(torch.int8, group_size=group_size)
+
+        config = IntXQuantizationAwareTrainingConfig(weight_config=weight_config)
+
+        quantize_(self, config)
+
+    def remove_fake_quantized_tensors(self) -> None:
+        """Convert fake quantized tensors back to regular tensors."""
+
+        config = FromIntXQuantizationAwareTrainingConfig()
+
+        quantize_(self, config)
+
+    def quantize_weights(self, group_size: int) -> None:
+        """Quantize the weights of the model."""
+
+        for module in self.modules():
+            if isinstance(module, Linear):
+                assert module.in_features % group_size == 0, (
+                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
+                    f" of layer {module}."
+                )
+
+        config = Int8WeightOnlyConfig(group_size=group_size)
+
+        quantize_(self, config)
 
     def enable_activation_checkpointing(self) -> None:
         """Instead of memorizing the activations of the forward pass, recompute them at various checkpoints."""
