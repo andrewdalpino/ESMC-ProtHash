@@ -491,7 +491,12 @@ class AdapterHead(Module):
     def __init__(self, in_dimensions: int, out_dimensions: int):
         super().__init__()
 
+        self.norm = RMSNorm(in_dimensions)
+
         self.linear = Linear(in_dimensions, out_dimensions, bias=False)
 
     def forward(self, x: Tensor) -> Tensor:
-        return self.linear(x)
+        z = self.norm.forward(x)
+        z = self.linear.forward(z)
+
+        return z

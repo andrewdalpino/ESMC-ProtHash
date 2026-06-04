@@ -10,7 +10,7 @@ class DecomposedNormalizedMSE(Module):
     MSE loss decomposed into independent direction and magnitude components and normalized.
     """
 
-    def __init__(self, epsilon: float = 1e-8):
+    def __init__(self, epsilon: float):
         super().__init__()
 
         assert epsilon > 0, "Epsilon must be a positive value."

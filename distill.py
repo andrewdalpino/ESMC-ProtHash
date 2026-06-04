@@ -27,8 +27,8 @@ from tqdm import tqdm
 AVAILABLE_TEACHERS = {"esmc_300m", "esmc_600m"}
 
 TEACHER_LAYER_ANCHOR_POINTS = {
-    "esmc_300m": (7, 14, 21, 29),
-    "esmc_600m": (8, 17, 26, 35),
+    "esmc_300m": (12, 18, 24, 29),
+    "esmc_600m": (14, 21, 28, 35),
 }
 
 
@@ -52,7 +52,8 @@ def main():
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
-    parser.add_argument("--max_steps", default=20000, type=int)
+    parser.add_argument("--max_steps", default=15000, type=int)
+    parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
     parser.add_argument("--stage1_magnitude_weight", default=0.125, type=float)
     parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
@@ -65,9 +66,9 @@ def main():
     parser.add_argument("--num_attention_heads", default=16, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
     parser.add_argument("--num_encoder_layers", default=12, type=int)
-    parser.add_argument("--eval_interval", default=100, type=int)
-    parser.add_argument("--num_eval_samples", default=5000, type=int)
-    parser.add_argument("--checkpoint_interval", default=100, type=int)
+    parser.add_argument("--eval_interval", default=200, type=int)
+    parser.add_argument("--num_eval_samples", default=8000, type=int)
+    parser.add_argument("--checkpoint_interval", default=200, type=int)
 
     parser.add_argument(
         "--checkpoint_path", default="./checkpoints/checkpoint.pt", type=str
@@ -198,7 +199,7 @@ def main():
 
     print(f"Number of parameters: {student.num_params:,}")
 
-    loss_function = DecomposedNormalizedMSE()
+    loss_function = DecomposedNormalizedMSE(args.loss_norm_epsilon)
 
     combined_loss_function = WeightedMultistageLoss(
         [
