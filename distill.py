@@ -6,6 +6,7 @@ from functools import partial
 import torch
 
 from torch.optim import AdamW
+from torch.optim.lr_scheduler import ConstantLR, LinearLR
 from torch.utils.data import DataLoader, random_split
 from torch.cuda import is_available as cuda_is_available, is_bf16_supported
 from torch.backends.mps import is_available as mps_is_available
@@ -51,6 +52,7 @@ def main():
     parser.add_argument("--quantization_aware_training", action="store_true")
     parser.add_argument("--quant_group_size", default=64, type=int)
     parser.add_argument("--learning_rate", default=3e-4, type=float)
+    parser.add_argument("--anneal_learning_rate", action="store_true")
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
@@ -65,7 +67,7 @@ def main():
     parser.add_argument("--stage4_direction_weight", default=1.0, type=float)
     parser.add_argument("--stage4_magnitude_weight", default=0.5, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
-    parser.add_argument("--num_attention_heads", default=16, type=int)
+    parser.add_argument("--num_attention_heads", default=8, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
     parser.add_argument("--num_encoder_layers", default=12, type=int)
     parser.add_argument("--eval_interval", default=200, type=int)
@@ -169,6 +171,7 @@ def main():
     test_loader = DataLoader(
         testing,
         batch_sampler=sorted_length_sampler,
+        collate_fn=dataset.collate_pad_right,
         pin_memory="cpu" not in args.device,
         num_workers=args.num_dataset_processes,
     )
@@ -238,6 +241,15 @@ def main():
         step += checkpoint["step"]
 
         print("Previous checkpoint resumed successfully")
+
+    if args.anneal_learning_rate:
+        total_iters = args.max_steps - step
+
+        scheduler = LinearLR(
+            optimizer, start_factor=1.0, end_factor=0.0, total_iters=total_iters
+        )
+    else:
+        scheduler = ConstantLR(optimizer, factor=1.0)
 
     student.train()
 
@@ -346,6 +358,8 @@ def main():
             optimizer.step()
 
             optimizer.zero_grad()
+
+            scheduler.step()
 
             progress_bar.close()
 
@@ -529,6 +543,7 @@ def main():
                     "model_args": model_args,
                     "model": student.state_dict(),
                     "optimizer": optimizer.state_dict(),
+                    "scheduler": scheduler.state_dict(),
                 }
 
                 torch.save(checkpoint, args.checkpoint_path)
