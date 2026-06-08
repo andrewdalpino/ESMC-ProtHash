@@ -22,7 +22,11 @@ from esm.models.esmc import ESMC
 from src.prothash.model import ESMCProtHash
 
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
-from loss import DecomposedRepresentationLoss, WeightedMultistageLoss
+from loss import (
+    DecomposedRepresentationLoss,
+    ContrastiveAlignmentLoss,
+    WeightedMultistageLoss,
+)
 from metrics import CosineSimilarity, LinearCKA
 
 from tqdm import tqdm
@@ -59,13 +63,15 @@ def main():
     parser.add_argument("--max_steps", default=100000, type=int)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
-    parser.add_argument("--stage1_magnitude_weight", default=0.125, type=float)
+    parser.add_argument("--stage1_magnitude_weight", default=0.05, type=float)
     parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
-    parser.add_argument("--stage2_magnitude_weight", default=0.25, type=float)
+    parser.add_argument("--stage2_magnitude_weight", default=0.1, type=float)
     parser.add_argument("--stage3_direction_weight", default=0.75, type=float)
-    parser.add_argument("--stage3_magnitude_weight", default=0.375, type=float)
+    parser.add_argument("--stage3_magnitude_weight", default=0.15, type=float)
     parser.add_argument("--stage4_direction_weight", default=1.0, type=float)
-    parser.add_argument("--stage4_magnitude_weight", default=0.5, type=float)
+    parser.add_argument("--stage4_magnitude_weight", default=0.2, type=float)
+    parser.add_argument("--contrastive_loss_weight", default=0.01, type=float)
+    parser.add_argument("--contrastive_loss_temperature", default=0.7, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=8, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
@@ -209,7 +215,11 @@ def main():
 
     print(f"Number of parameters: {student.num_params:,}")
 
-    loss_function = DecomposedRepresentationLoss(args.loss_norm_epsilon)
+    decomposed_loss_function = DecomposedRepresentationLoss(args.loss_norm_epsilon)
+
+    contrastive_loss_function = ContrastiveAlignmentLoss(
+        args.contrastive_loss_temperature, args.loss_norm_epsilon
+    )
 
     combined_loss_function = WeightedMultistageLoss(
         [
@@ -221,6 +231,7 @@ def main():
             args.stage3_magnitude_weight,
             args.stage4_direction_weight,
             args.stage4_magnitude_weight,
+            args.contrastive_loss_weight,
         ]
     )
 
@@ -275,6 +286,8 @@ def main():
     total_stage1_magnitude_loss, total_stage2_magnitude_loss = 0.0, 0.0
     total_stage3_magnitude_loss, total_stage4_magnitude_loss = 0.0, 0.0
 
+    total_contrastive_loss = 0.0
+
     num_batches = 0
 
     print("Distilling ...")
@@ -303,19 +316,23 @@ def main():
             y3_teacher = out_teacher.hidden_states[anchor_points[2]]
             y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-            stage1_direction_loss, stage1_magnitude_loss = loss_function.forward(
-                y1_student, y1_teacher, mask
+            stage1_direction_loss, stage1_magnitude_loss = (
+                decomposed_loss_function.forward(y1_student, y1_teacher, mask)
             )
 
-            stage2_direction_loss, stage2_magnitude_loss = loss_function.forward(
-                y2_student, y2_teacher, mask
+            stage2_direction_loss, stage2_magnitude_loss = (
+                decomposed_loss_function.forward(y2_student, y2_teacher, mask)
             )
 
-            stage3_direction_loss, stage3_magnitude_loss = loss_function.forward(
-                y3_student, y3_teacher, mask
+            stage3_direction_loss, stage3_magnitude_loss = (
+                decomposed_loss_function.forward(y3_student, y3_teacher, mask)
             )
 
-            stage4_direction_loss, stage4_magnitude_loss = loss_function.forward(
+            stage4_direction_loss, stage4_magnitude_loss = (
+                decomposed_loss_function.forward(y4_student, y4_teacher, mask)
+            )
+
+            contrastive_loss = contrastive_loss_function.forward(
                 y4_student, y4_teacher, mask
             )
 
@@ -330,6 +347,7 @@ def main():
                         stage3_magnitude_loss,
                         stage4_direction_loss,
                         stage4_magnitude_loss,
+                        contrastive_loss,
                     ]
                 )
             )
@@ -347,6 +365,8 @@ def main():
         total_stage2_magnitude_loss += stage2_magnitude_loss.item()
         total_stage3_magnitude_loss += stage3_magnitude_loss.item()
         total_stage4_magnitude_loss += stage4_magnitude_loss.item()
+
+        total_contrastive_loss += contrastive_loss.item()
 
         num_batches += 1
 
@@ -372,6 +392,8 @@ def main():
             average_stage2_magnitude_loss = total_stage2_magnitude_loss / num_batches
             average_stage3_magnitude_loss = total_stage3_magnitude_loss / num_batches
             average_stage4_magnitude_loss = total_stage4_magnitude_loss / num_batches
+
+            average_contrastive_loss = total_contrastive_loss / num_batches
 
             gradient_norm = norm.item()
 
@@ -407,6 +429,7 @@ def main():
                 "Stage 4 Magnitude L2", average_stage4_magnitude_loss, step
             )
 
+            logger.add_scalar("Contrastive Loss", average_contrastive_loss, step)
             logger.add_scalar("Gradient Norm:", gradient_norm, step)
 
             print(
@@ -419,6 +442,7 @@ def main():
                 f"Stage 3 Magnitude L2: {average_stage3_magnitude_loss:.5f},",
                 f"Stage 4 Direction L2: {average_stage4_direction_loss:.5f},",
                 f"Stage 4 Magnitude L2: {average_stage4_magnitude_loss:.5f},",
+                f"Contrastive Loss: {average_contrastive_loss:.4f},",
                 f"Gradient Norm: {gradient_norm:.5f}",
             )
 
@@ -431,6 +455,8 @@ def main():
             total_stage2_magnitude_loss = 0.0
             total_stage3_magnitude_loss = 0.0
             total_stage4_magnitude_loss = 0.0
+
+            total_contrastive_loss = 0.0
 
             num_batches = 0
 

@@ -232,19 +232,19 @@ class Encoder(Module):
         )
 
         self.stage1 = Sequential(
-            *[new_encoder_block() for _ in range(ceil(num_layers / 4))]
+            *[new_encoder_block() for _ in range(floor(num_layers / 4))]
         )
 
         self.stage2 = Sequential(
-            *[new_encoder_block() for _ in range(floor(num_layers / 4))]
-        )
-
-        self.stage3 = Sequential(
             *[new_encoder_block() for _ in range(ceil(num_layers / 4))]
         )
 
-        self.stage4 = Sequential(
+        self.stage3 = Sequential(
             *[new_encoder_block() for _ in range(floor(num_layers / 4))]
+        )
+
+        self.stage4 = Sequential(
+            *[new_encoder_block() for _ in range(ceil(num_layers / 4))]
         )
 
         self.checkpoint = lambda layer, x: layer.forward(x)
