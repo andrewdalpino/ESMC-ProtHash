@@ -22,7 +22,7 @@ from esm.models.esmc import ESMC
 from src.prothash.model import ESMCProtHash
 
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
-from loss import DecomposedNormalizedMSE, WeightedMultistageLoss
+from loss import DecomposedRepresentationLoss, WeightedMultistageLoss
 from metrics import CosineSimilarity, LinearCKA
 
 from tqdm import tqdm
@@ -56,7 +56,7 @@ def main():
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
-    parser.add_argument("--max_steps", default=50000, type=int)
+    parser.add_argument("--max_steps", default=100000, type=int)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
     parser.add_argument("--stage1_magnitude_weight", default=0.125, type=float)
@@ -209,7 +209,7 @@ def main():
 
     print(f"Number of parameters: {student.num_params:,}")
 
-    loss_function = DecomposedNormalizedMSE(args.loss_norm_epsilon)
+    loss_function = DecomposedRepresentationLoss(args.loss_norm_epsilon)
 
     combined_loss_function = WeightedMultistageLoss(
         [
