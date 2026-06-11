@@ -1,4 +1,4 @@
-from math import sqrt, ceil, floor, pi
+from math import sqrt, ceil, pi
 from functools import partial
 
 import torch
@@ -142,7 +142,7 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         return z1, z2, z3, z4
 
     @torch.inference_mode()
-    def embed(self, x: Tensor) -> tuple[Tensor, ...]:
+    def embed_native(self, x: Tensor) -> tuple[Tensor, ...]:
         """
         Output the contextual embeddings of the input sequence in native embedding dimensionality.
 
@@ -158,7 +158,7 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         return z1, z2, z3, z4
 
     @torch.inference_mode()
-    def embed_esmc(self, x: Tensor) -> tuple[Tensor, ...]:
+    def embed(self, x: Tensor) -> tuple[Tensor, ...]:
         """
         Output the contextual embeddings of the input sequence in the teacher's dimensionality.
 
@@ -231,20 +231,36 @@ class Encoder(Module):
             hidden_ratio=hidden_ratio,
         )
 
+        base, remainder = num_layers // 4, num_layers % 4
+
+        stage_1_num_layers = base
+        stage_2_num_layers = base
+        stage_3_num_layers = base
+        stage_4_num_layers = base
+
+        if remainder >= 1:
+            stage_4_num_layers += 1
+
+        if remainder >= 2:
+            stage_3_num_layers += 1
+
+        if remainder >= 3:
+            stage_2_num_layers += 1
+
         self.stage1 = Sequential(
-            *[new_encoder_block() for _ in range(floor(num_layers / 4))]
+            *[new_encoder_block() for _ in range(stage_1_num_layers)]
         )
 
         self.stage2 = Sequential(
-            *[new_encoder_block() for _ in range(ceil(num_layers / 4))]
+            *[new_encoder_block() for _ in range(stage_2_num_layers)]
         )
 
         self.stage3 = Sequential(
-            *[new_encoder_block() for _ in range(floor(num_layers / 4))]
+            *[new_encoder_block() for _ in range(stage_3_num_layers)]
         )
 
         self.stage4 = Sequential(
-            *[new_encoder_block() for _ in range(ceil(num_layers / 4))]
+            *[new_encoder_block() for _ in range(stage_4_num_layers)]
         )
 
         self.checkpoint = lambda layer, x: layer.forward(x)

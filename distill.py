@@ -25,7 +25,7 @@ from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
 from loss import (
     DecomposedRepresentationLoss,
     ContrastiveAlignmentLoss,
-    WeightedMultistageLoss,
+    WeightedCombinedLoss,
 )
 from metrics import CosineSimilarity, LinearCKA
 
@@ -61,7 +61,6 @@ def main():
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
     parser.add_argument("--max_steps", default=100000, type=int)
-    parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
     parser.add_argument("--stage1_magnitude_weight", default=0.05, type=float)
     parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
@@ -70,8 +69,10 @@ def main():
     parser.add_argument("--stage3_magnitude_weight", default=0.15, type=float)
     parser.add_argument("--stage4_direction_weight", default=1.0, type=float)
     parser.add_argument("--stage4_magnitude_weight", default=0.2, type=float)
-    parser.add_argument("--contrastive_loss_weight", default=0.01, type=float)
+    parser.add_argument("--student_contrastive_weight", default=0.01, type=float)
+    parser.add_argument("--teacher_contrastive_weight", default=0.01, type=float)
     parser.add_argument("--contrastive_loss_temperature", default=0.7, type=float)
+    parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=8, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
@@ -221,7 +222,7 @@ def main():
         args.contrastive_loss_temperature, args.loss_norm_epsilon
     )
 
-    combined_loss_function = WeightedMultistageLoss(
+    combined_loss_function = WeightedCombinedLoss(
         [
             args.stage1_direction_weight,
             args.stage1_magnitude_weight,
@@ -231,7 +232,8 @@ def main():
             args.stage3_magnitude_weight,
             args.stage4_direction_weight,
             args.stage4_magnitude_weight,
-            args.contrastive_loss_weight,
+            args.student_contrastive_weight,
+            args.teacher_contrastive_weight,
         ]
     )
 
@@ -286,7 +288,7 @@ def main():
     total_stage1_magnitude_loss, total_stage2_magnitude_loss = 0.0, 0.0
     total_stage3_magnitude_loss, total_stage4_magnitude_loss = 0.0, 0.0
 
-    total_contrastive_loss = 0.0
+    total_student_contrastive_loss, total_teacher_contrastive_loss = 0.0, 0.0
 
     num_batches = 0
 
@@ -332,8 +334,8 @@ def main():
                 decomposed_loss_function.forward(y4_student, y4_teacher, mask)
             )
 
-            contrastive_loss = contrastive_loss_function.forward(
-                y4_student, y4_teacher, mask
+            student_contrastive_loss, teacher_contrastive_loss = (
+                contrastive_loss_function.forward(y4_student, y4_teacher, mask)
             )
 
             combined_loss = combined_loss_function.forward(
@@ -347,7 +349,8 @@ def main():
                         stage3_magnitude_loss,
                         stage4_direction_loss,
                         stage4_magnitude_loss,
-                        contrastive_loss,
+                        student_contrastive_loss,
+                        teacher_contrastive_loss,
                     ]
                 )
             )
@@ -366,7 +369,8 @@ def main():
         total_stage3_magnitude_loss += stage3_magnitude_loss.item()
         total_stage4_magnitude_loss += stage4_magnitude_loss.item()
 
-        total_contrastive_loss += contrastive_loss.item()
+        total_student_contrastive_loss += student_contrastive_loss.item()
+        total_teacher_contrastive_loss += teacher_contrastive_loss.item()
 
         num_batches += 1
 
@@ -393,7 +397,13 @@ def main():
             average_stage3_magnitude_loss = total_stage3_magnitude_loss / num_batches
             average_stage4_magnitude_loss = total_stage4_magnitude_loss / num_batches
 
-            average_contrastive_loss = total_contrastive_loss / num_batches
+            average_student_contrastive_loss = (
+                total_student_contrastive_loss / num_batches
+            )
+
+            average_teacher_contrastive_loss = (
+                total_teacher_contrastive_loss / num_batches
+            )
 
             gradient_norm = norm.item()
 
@@ -429,8 +439,15 @@ def main():
                 "Stage 4 Magnitude L2", average_stage4_magnitude_loss, step
             )
 
-            logger.add_scalar("Contrastive Loss", average_contrastive_loss, step)
-            logger.add_scalar("Gradient Norm:", gradient_norm, step)
+            logger.add_scalar(
+                "Student Contrastive Loss", average_student_contrastive_loss, step
+            )
+
+            logger.add_scalar(
+                "Teacher Contrastive Loss", average_teacher_contrastive_loss, step
+            )
+
+            logger.add_scalar("Gradient Norm", gradient_norm, step)
 
             print(
                 f"Step {step:,}:",
@@ -442,7 +459,8 @@ def main():
                 f"Stage 3 Magnitude L2: {average_stage3_magnitude_loss:.5f},",
                 f"Stage 4 Direction L2: {average_stage4_direction_loss:.5f},",
                 f"Stage 4 Magnitude L2: {average_stage4_magnitude_loss:.5f},",
-                f"Contrastive Loss: {average_contrastive_loss:.4f},",
+                f"Student Contrastive Loss: {average_student_contrastive_loss:.4f},",
+                f"Teacher Contrastive Loss: {average_teacher_contrastive_loss:.4f},",
                 f"Gradient Norm: {gradient_norm:.5f}",
             )
 
@@ -456,7 +474,8 @@ def main():
             total_stage3_magnitude_loss = 0.0
             total_stage4_magnitude_loss = 0.0
 
-            total_contrastive_loss = 0.0
+            total_student_contrastive_loss = 0.0
+            total_teacher_contrastive_loss = 0.0
 
             num_batches = 0
 

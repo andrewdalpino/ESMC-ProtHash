@@ -11,12 +11,12 @@ class DecomposedRepresentationLoss(Module):
     MSE loss decomposed into independent direction and magnitude components and normalized.
     """
 
-    def __init__(self, epsilon: float):
+    def __init__(self, norm_epsilon: float):
         super().__init__()
 
-        assert epsilon > 0, "Epsilon must be a positive value."
+        assert norm_epsilon > 0, "Epsilon must be a positive value."
 
-        self.epsilon = epsilon
+        self.norm_epsilon = norm_epsilon
 
     def forward(
         self, y_student: Tensor, y_teacher: Tensor, mask: Tensor
@@ -28,8 +28,8 @@ class DecomposedRepresentationLoss(Module):
         student_norm = y_student.norm(dim=-1, keepdim=True)
         teacher_norm = y_teacher.norm(dim=-1, keepdim=True)
 
-        student_norm = student_norm.clamp(min=self.epsilon)
-        teacher_norm = teacher_norm.clamp(min=self.epsilon)
+        student_norm = student_norm.clamp(min=self.norm_epsilon)
+        teacher_norm = teacher_norm.clamp(min=self.norm_epsilon)
 
         y_student_normalized = y_student / student_norm
         y_teacher_normalized = y_teacher / teacher_norm
@@ -55,16 +55,18 @@ class ContrastiveAlignmentLoss(Module):
     corresponding sequences are positive pairs and non-corresponding sequences are negatives.
     """
 
-    def __init__(self, temperature: float, epsilon: float):
+    def __init__(self, temperature: float, norm_epsilon: float):
         super().__init__()
 
         assert temperature > 0, "Temperature must be a positive value."
-        assert epsilon > 0, "Epsilon must be a positive value."
+        assert norm_epsilon > 0, "Epsilon must be a positive value."
 
         self.temperature = temperature
-        self.epsilon = epsilon
+        self.norm_epsilon = norm_epsilon
 
-    def forward(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor) -> Tensor:
+    def forward(
+        self, y_student: Tensor, y_teacher: Tensor, mask: Tensor
+    ) -> tuple[Tensor, Tensor]:
         assert (
             y_student.size() == y_teacher.size()
         ), "y_student and y_teacher must have the same dimensionality."
@@ -74,7 +76,11 @@ class ContrastiveAlignmentLoss(Module):
         student_pooled = (y_student * mask).sum(dim=1)
         teacher_pooled = (y_teacher * mask).sum(dim=1)
 
-        sequence_lengths = mask.sum(dim=1).clamp(min=self.epsilon)
+        sequence_lengths = mask.sum(dim=1)
+
+        assert (
+            sequence_lengths > 0
+        ).all(), "Each sequence must have at least one unmasked position."
 
         student_pooled = student_pooled / sequence_lengths
         teacher_pooled = teacher_pooled / sequence_lengths
@@ -82,8 +88,8 @@ class ContrastiveAlignmentLoss(Module):
         student_norm = student_pooled.norm(dim=-1, keepdim=True)
         teacher_norm = teacher_pooled.norm(dim=-1, keepdim=True)
 
-        student_norm = student_norm.clamp(min=self.epsilon)
-        teacher_norm = teacher_norm.clamp(min=self.epsilon)
+        student_norm = student_norm.clamp(min=self.norm_epsilon)
+        teacher_norm = teacher_norm.clamp(min=self.norm_epsilon)
 
         student_pooled_normalized = student_pooled / student_norm
         teacher_pooled_normalized = teacher_pooled / teacher_norm
@@ -94,17 +100,13 @@ class ContrastiveAlignmentLoss(Module):
 
         labels = torch.arange(logits.size(0), device=logits.device)
 
-        student_to_teacher_loss = cross_entropy(logits, labels)
-        teacher_to_student_loss = cross_entropy(logits.T, labels)
+        student_loss = cross_entropy(logits, labels)
+        teacher_loss = cross_entropy(logits.T, labels)
 
-        loss = (student_to_teacher_loss + teacher_to_student_loss) / 2
-
-        return loss
+        return student_loss, teacher_loss
 
 
-class WeightedMultistageLoss(Module):
-    """A multistage loss weighting where each stage contributes based on a static scalar."""
-
+class WeightedCombinedLoss(Module):
     def __init__(self, weights: list[float]):
         super().__init__()
 
