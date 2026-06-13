@@ -58,8 +58,8 @@ def main():
     parser.add_argument("--learning_rate", default=3e-4, type=float)
     parser.add_argument("--anneal_learning_rate", action="store_true")
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
-    parser.add_argument("--batch_size", default=16, type=int)
-    parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
+    parser.add_argument("--batch_size", default=8, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=32, type=int)
     parser.add_argument("--max_steps", default=100000, type=int)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
     parser.add_argument("--stage1_magnitude_weight", default=0.05, type=float)
@@ -69,14 +69,17 @@ def main():
     parser.add_argument("--stage3_magnitude_weight", default=0.15, type=float)
     parser.add_argument("--stage4_direction_weight", default=1.0, type=float)
     parser.add_argument("--stage4_magnitude_weight", default=0.2, type=float)
-    parser.add_argument("--student_contrastive_weight", default=0.01, type=float)
-    parser.add_argument("--teacher_contrastive_weight", default=0.01, type=float)
+    parser.add_argument("--contrastive_loss_weight", default=0.01, type=float)
     parser.add_argument("--contrastive_loss_temperature", default=0.7, type=float)
+    parser.add_argument("--contrastive_loss_queue_size", default=2048, type=int)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=8, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
-    parser.add_argument("--num_encoder_layers", default=12, type=int)
+    parser.add_argument("--num_stage1_layers", default=3, type=int)
+    parser.add_argument("--num_stage2_layers", default=3, type=int)
+    parser.add_argument("--num_stage3_layers", default=4, type=int)
+    parser.add_argument("--num_stage4_layers", default=5, type=int)
     parser.add_argument("--eval_interval", default=200, type=int)
     parser.add_argument("--num_eval_samples", default=10000, type=int)
     parser.add_argument("--checkpoint_interval", default=200, type=int)
@@ -204,7 +207,10 @@ def main():
         "embedding_dimensions": args.embedding_dimensions,
         "num_attention_heads": args.num_attention_heads,
         "hidden_ratio": args.hidden_ratio,
-        "num_encoder_layers": args.num_encoder_layers,
+        "num_stage1_layers": args.num_stage1_layers,
+        "num_stage2_layers": args.num_stage2_layers,
+        "num_stage3_layers": args.num_stage3_layers,
+        "num_stage4_layers": args.num_stage4_layers,
     }
 
     student = ESMCProtHash(**model_args)
@@ -219,7 +225,9 @@ def main():
     decomposed_loss_function = DecomposedRepresentationLoss(args.loss_norm_epsilon)
 
     contrastive_loss_function = ContrastiveAlignmentLoss(
-        args.contrastive_loss_temperature, args.loss_norm_epsilon
+        args.contrastive_loss_temperature,
+        args.loss_norm_epsilon,
+        args.contrastive_loss_queue_size,
     )
 
     combined_loss_function = WeightedCombinedLoss(
@@ -232,8 +240,7 @@ def main():
             args.stage3_magnitude_weight,
             args.stage4_direction_weight,
             args.stage4_magnitude_weight,
-            args.student_contrastive_weight,
-            args.teacher_contrastive_weight,
+            args.contrastive_loss_weight,
         ]
     )
 
@@ -288,7 +295,7 @@ def main():
     total_stage1_magnitude_loss, total_stage2_magnitude_loss = 0.0, 0.0
     total_stage3_magnitude_loss, total_stage4_magnitude_loss = 0.0, 0.0
 
-    total_student_contrastive_loss, total_teacher_contrastive_loss = 0.0, 0.0
+    total_contrastive_loss = 0.0
 
     num_batches = 0
 
@@ -334,8 +341,8 @@ def main():
                 decomposed_loss_function.forward(y4_student, y4_teacher, mask)
             )
 
-            student_contrastive_loss, teacher_contrastive_loss = (
-                contrastive_loss_function.forward(y4_student, y4_teacher, mask)
+            contrastive_loss = contrastive_loss_function.forward(
+                y4_student, y4_teacher, mask
             )
 
             combined_loss = combined_loss_function.forward(
@@ -349,8 +356,7 @@ def main():
                         stage3_magnitude_loss,
                         stage4_direction_loss,
                         stage4_magnitude_loss,
-                        student_contrastive_loss,
-                        teacher_contrastive_loss,
+                        contrastive_loss,
                     ]
                 )
             )
@@ -369,8 +375,7 @@ def main():
         total_stage3_magnitude_loss += stage3_magnitude_loss.item()
         total_stage4_magnitude_loss += stage4_magnitude_loss.item()
 
-        total_student_contrastive_loss += student_contrastive_loss.item()
-        total_teacher_contrastive_loss += teacher_contrastive_loss.item()
+        total_contrastive_loss += contrastive_loss.item()
 
         num_batches += 1
 
@@ -397,13 +402,7 @@ def main():
             average_stage3_magnitude_loss = total_stage3_magnitude_loss / num_batches
             average_stage4_magnitude_loss = total_stage4_magnitude_loss / num_batches
 
-            average_student_contrastive_loss = (
-                total_student_contrastive_loss / num_batches
-            )
-
-            average_teacher_contrastive_loss = (
-                total_teacher_contrastive_loss / num_batches
-            )
+            average_contrastive_loss = total_contrastive_loss / num_batches
 
             gradient_norm = norm.item()
 
@@ -439,13 +438,7 @@ def main():
                 "Stage 4 Magnitude L2", average_stage4_magnitude_loss, step
             )
 
-            logger.add_scalar(
-                "Student Contrastive Loss", average_student_contrastive_loss, step
-            )
-
-            logger.add_scalar(
-                "Teacher Contrastive Loss", average_teacher_contrastive_loss, step
-            )
+            logger.add_scalar("Contrastive Loss", average_contrastive_loss, step)
 
             logger.add_scalar("Gradient Norm", gradient_norm, step)
 
@@ -459,8 +452,7 @@ def main():
                 f"Stage 3 Magnitude L2: {average_stage3_magnitude_loss:.5f},",
                 f"Stage 4 Direction L2: {average_stage4_direction_loss:.5f},",
                 f"Stage 4 Magnitude L2: {average_stage4_magnitude_loss:.5f},",
-                f"Student Contrastive Loss: {average_student_contrastive_loss:.4f},",
-                f"Teacher Contrastive Loss: {average_teacher_contrastive_loss:.4f},",
+                f"Contrastive Loss: {average_contrastive_loss:.4f},",
                 f"Gradient Norm: {gradient_norm:.5f}",
             )
 
@@ -474,8 +466,7 @@ def main():
             total_stage3_magnitude_loss = 0.0
             total_stage4_magnitude_loss = 0.0
 
-            total_student_contrastive_loss = 0.0
-            total_teacher_contrastive_loss = 0.0
+            total_contrastive_loss = 0.0
 
             num_batches = 0
 
@@ -499,9 +490,7 @@ def main():
                     y3_teacher = out_teacher.hidden_states[anchor_points[2]]
                     y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-                    y1_student, y2_student, y3_student, y4_student = student.embed_esmc(
-                        x
-                    )
+                    y1_student, y2_student, y3_student, y4_student = student.embed(x)
 
                     stage1_cosine_similarity_metric.update(y1_student, y1_teacher, mask)
                     stage2_cosine_similarity_metric.update(y2_student, y2_teacher, mask)

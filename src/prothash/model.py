@@ -45,7 +45,10 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         embedding_dimensions: int,
         num_attention_heads: int,
         hidden_ratio: int,
-        num_encoder_layers: int,
+        num_stage1_layers: int,
+        num_stage2_layers: int,
+        num_stage3_layers: int,
+        num_stage4_layers: int,
     ) -> None:
         super().__init__()
 
@@ -57,8 +60,11 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             context_length,
             embedding_dimensions,
             num_attention_heads,
-            num_encoder_layers,
             hidden_ratio,
+            num_stage1_layers,
+            num_stage2_layers,
+            num_stage3_layers,
+            num_stage4_layers,
         )
 
         if embedding_dimensions != teacher_dimensions:
@@ -177,7 +183,7 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
 class ONNXModel(Module):
     """
     A wrapper class for exporting the ProtHash model to ONNX format with output in
-    native embedding dimensionality.
+    teacher's embedding dimensionality.
     """
 
     def __init__(self, model: ESMCProtHash):
@@ -191,23 +197,6 @@ class ONNXModel(Module):
         return z1, z2, z3, z4
 
 
-class ONNXModelESMC(Module):
-    """
-    A wrapper class for exporting the ProtHash model to ONNX format with output in
-    its teacher's embedding dimensionality.
-    """
-
-    def __init__(self, model: ESMCProtHash):
-        super().__init__()
-
-        self.model = model
-
-    def forward(self, x: Tensor) -> tuple[Tensor, ...]:
-        z1, z2, z3, z4 = self.model.embed_esmc(x)
-
-        return z1, z2, z3, z4
-
-
 class Encoder(Module):
     """A deep stack of encoder blocks consisting of self-attention and feed-forward layers."""
 
@@ -216,12 +205,26 @@ class Encoder(Module):
         context_length: int,
         embedding_dimensions: int,
         num_attention_heads: int,
-        num_layers: int,
         hidden_ratio: int,
+        num_stage1_layers: int,
+        num_stage2_layers: int,
+        num_stage3_layers: int,
+        num_stage4_layers: int,
     ):
         super().__init__()
 
-        assert num_layers >= 4, "Number of layers must be greater than or equal to 4."
+        assert (
+            num_stage1_layers >= 1
+        ), "Number of stage 1 layers must be greater than 0."
+        assert (
+            num_stage2_layers >= 1
+        ), "Number of stage 2 layers must be greater than 0."
+        assert (
+            num_stage3_layers >= 1
+        ), "Number of stage 3 layers must be greater than 0."
+        assert (
+            num_stage4_layers >= 1
+        ), "Number of stage 4 layers must be greater than 0."
 
         new_encoder_block = partial(
             EncoderBlock,
@@ -231,36 +234,20 @@ class Encoder(Module):
             hidden_ratio=hidden_ratio,
         )
 
-        base, remainder = num_layers // 4, num_layers % 4
-
-        stage_1_num_layers = base
-        stage_2_num_layers = base
-        stage_3_num_layers = base
-        stage_4_num_layers = base
-
-        if remainder >= 1:
-            stage_4_num_layers += 1
-
-        if remainder >= 2:
-            stage_3_num_layers += 1
-
-        if remainder >= 3:
-            stage_2_num_layers += 1
-
         self.stage1 = Sequential(
-            *[new_encoder_block() for _ in range(stage_1_num_layers)]
+            *[new_encoder_block() for _ in range(num_stage1_layers)]
         )
 
         self.stage2 = Sequential(
-            *[new_encoder_block() for _ in range(stage_2_num_layers)]
+            *[new_encoder_block() for _ in range(num_stage2_layers)]
         )
 
         self.stage3 = Sequential(
-            *[new_encoder_block() for _ in range(stage_3_num_layers)]
+            *[new_encoder_block() for _ in range(num_stage3_layers)]
         )
 
         self.stage4 = Sequential(
-            *[new_encoder_block() for _ in range(stage_4_num_layers)]
+            *[new_encoder_block() for _ in range(num_stage4_layers)]
         )
 
         self.checkpoint = lambda layer, x: layer.forward(x)

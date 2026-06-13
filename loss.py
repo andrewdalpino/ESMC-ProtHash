@@ -51,22 +51,29 @@ class DecomposedRepresentationLoss(Module):
 class ContrastiveAlignmentLoss(Module):
     """
     Sequence-level contrastive alignment loss. Pools student and teacher representations
-    over the sequence dimension, then computes a symmetric InfoNCE (NT-Xent) loss where
+    over the sequence dimension, then computes an  asymmetric InfoNCE (NT-Xent) loss where
     corresponding sequences are positive pairs and non-corresponding sequences are negatives.
+
+    Optionally maintains a FIFO queue of past teacher representations to serve as additional
+    negatives, compensating for small batch sizes.
     """
 
-    def __init__(self, temperature: float, norm_epsilon: float):
+    def __init__(self, temperature: float, norm_epsilon: float, queue_size: int):
         super().__init__()
 
         assert temperature > 0, "Temperature must be a positive value."
         assert norm_epsilon > 0, "Epsilon must be a positive value."
+        assert queue_size >= 0, "Queue size must be non-negative."
+
+        self.queue = Buffer(torch.zeros(1, 1))
 
         self.temperature = temperature
         self.norm_epsilon = norm_epsilon
+        self.queue_size = queue_size
+        self.queue_pointer = 0
+        self.queue_filled = False
 
-    def forward(
-        self, y_student: Tensor, y_teacher: Tensor, mask: Tensor
-    ) -> tuple[Tensor, Tensor]:
+    def forward(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor) -> Tensor:
         assert (
             y_student.size() == y_teacher.size()
         ), "y_student and y_teacher must have the same dimensionality."
@@ -94,16 +101,40 @@ class ContrastiveAlignmentLoss(Module):
         student_pooled_normalized = student_pooled / student_norm
         teacher_pooled_normalized = teacher_pooled / teacher_norm
 
-        logits = student_pooled_normalized @ teacher_pooled_normalized.T
+        if self.queue.size(-1) != teacher_pooled_normalized.size(-1):
+            self.queue = torch.zeros(
+                self.queue_size,
+                teacher_pooled_normalized.size(-1),
+                device=teacher_pooled_normalized.device,
+            )
+
+        queue = self.queue if self.queue_filled else self.queue[: self.queue_pointer]
+
+        teacher_concat = torch.cat([teacher_pooled_normalized, queue], dim=0)
+
+        logits = student_pooled_normalized @ teacher_concat.T
 
         logits /= self.temperature
 
-        labels = torch.arange(logits.size(0), device=logits.device)
+        labels = torch.arange(student_pooled_normalized.size(0), device=logits.device)
 
-        student_loss = cross_entropy(logits, labels)
-        teacher_loss = cross_entropy(logits.T, labels)
+        loss = cross_entropy(logits, labels)
 
-        return student_loss, teacher_loss
+        with torch.no_grad():
+            n = teacher_pooled_normalized.size(0)
+
+            pn = self.queue_pointer + n
+
+            indices = torch.arange(self.queue_pointer, pn) % self.queue_size
+
+            self.queue[indices] = teacher_pooled_normalized.detach()
+
+            self.queue_pointer = pn % self.queue_size
+
+            if pn >= self.queue_size:
+                self.queue_filled = True
+
+        return loss
 
 
 class WeightedCombinedLoss(Module):
