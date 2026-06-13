@@ -226,9 +226,12 @@ def main():
 
     contrastive_loss_function = ContrastiveAlignmentLoss(
         args.contrastive_loss_temperature,
-        args.loss_norm_epsilon,
         args.contrastive_loss_queue_size,
+        teacher.embed.embedding_dim,
+        args.loss_norm_epsilon,
     )
+
+    contrastive_loss_function = contrastive_loss_function.to(args.device)
 
     combined_loss_function = WeightedCombinedLoss(
         [

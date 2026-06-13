@@ -58,14 +58,21 @@ class ContrastiveAlignmentLoss(Module):
     negatives, compensating for small batch sizes.
     """
 
-    def __init__(self, temperature: float, norm_epsilon: float, queue_size: int):
+    def __init__(
+        self,
+        temperature: float,
+        queue_size: int,
+        embedding_dimensions: int,
+        norm_epsilon: float,
+    ):
         super().__init__()
 
         assert temperature > 0, "Temperature must be a positive value."
         assert norm_epsilon > 0, "Epsilon must be a positive value."
-        assert queue_size >= 0, "Queue size must be non-negative."
+        assert queue_size > 0, "Queue size must be positive."
+        assert embedding_dimensions > 0, "Embedding dimensions must be positive."
 
-        self.queue = Buffer(torch.zeros(1, 1))
+        self.queue = Buffer(torch.zeros(queue_size, embedding_dimensions))
 
         self.temperature = temperature
         self.norm_epsilon = norm_epsilon
@@ -101,38 +108,31 @@ class ContrastiveAlignmentLoss(Module):
         student_pooled_normalized = student_pooled / student_norm
         teacher_pooled_normalized = teacher_pooled / teacher_norm
 
-        if self.queue.size(-1) != teacher_pooled_normalized.size(-1):
-            self.queue = torch.zeros(
-                self.queue_size,
-                teacher_pooled_normalized.size(-1),
-                device=teacher_pooled_normalized.device,
-            )
-
-        queue = self.queue if self.queue_filled else self.queue[: self.queue_pointer]
-
-        teacher_concat = torch.cat([teacher_pooled_normalized, queue], dim=0)
-
-        logits = student_pooled_normalized @ teacher_concat.T
-
-        logits /= self.temperature
-
-        labels = torch.arange(student_pooled_normalized.size(0), device=logits.device)
-
-        loss = cross_entropy(logits, labels)
-
         with torch.no_grad():
             n = teacher_pooled_normalized.size(0)
 
-            pn = self.queue_pointer + n
+            pointer_end = self.queue_pointer + n
 
-            indices = torch.arange(self.queue_pointer, pn) % self.queue_size
+            indices = torch.arange(self.queue_pointer, pointer_end) % self.queue_size
 
             self.queue[indices] = teacher_pooled_normalized.detach()
 
-            self.queue_pointer = pn % self.queue_size
+            self.queue_pointer = pointer_end % self.queue_size
 
-            if pn >= self.queue_size:
+            if pointer_end >= self.queue_size:
                 self.queue_filled = True
+
+        teacher_pooled_normalized = (
+            self.queue if self.queue_filled else self.queue[: self.queue_pointer]
+        )
+
+        logits = student_pooled_normalized @ teacher_pooled_normalized.T
+
+        logits /= self.temperature
+
+        labels = indices.to(device=logits.device)
+
+        loss = cross_entropy(logits, labels)
 
         return loss
 
