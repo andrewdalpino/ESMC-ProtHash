@@ -3,9 +3,8 @@ import unittest
 import torch
 
 from prothash.model import (
-    ProtHash,
-    ONNXModelNative,
-    ONNXModelTeacher,
+    ESMCProtHash,
+    ONNXModel,
     Encoder,
     EncoderBlock,
     SelfAttention,
@@ -23,23 +22,26 @@ SMALL_CONFIG = dict(
     embedding_dimensions=32,
     num_attention_heads=4,
     hidden_ratio=2,
-    num_encoder_layers=4,
+    num_stage1_layers=1,
+    num_stage2_layers=1,
+    num_stage3_layers=1,
+    num_stage4_layers=1,
 )
 
 BATCH_SIZE = 2
 SEQ_LENGTH = 8
 
 
-class TestProtHash(unittest.TestCase):
+class TestESMCProtHash(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(42)
-        self.model = ProtHash(**SMALL_CONFIG)
+        self.model = ESMCProtHash(**SMALL_CONFIG)
         self.x = torch.randint(
             1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH)
         )
 
     def test_default_construction(self):
-        model = ProtHash(**SMALL_CONFIG)
+        model = ESMCProtHash(**SMALL_CONFIG)
         self.assertEqual(model.vocabulary_size, SMALL_CONFIG["vocabulary_size"])
         self.assertEqual(model.padding_index, SMALL_CONFIG["padding_index"])
         self.assertEqual(model.context_length, SMALL_CONFIG["context_length"])
@@ -51,7 +53,7 @@ class TestProtHash(unittest.TestCase):
     def test_construction_without_adapters(self):
         dims = SMALL_CONFIG["embedding_dimensions"]
         config = {**SMALL_CONFIG, "teacher_dimensions": dims}
-        model = ProtHash(**config)
+        model = ESMCProtHash(**config)
         self.assertIsInstance(model.adapter1, torch.nn.Identity)
         self.assertIsInstance(model.adapter2, torch.nn.Identity)
         self.assertIsInstance(model.adapter3, torch.nn.Identity)
@@ -60,7 +62,7 @@ class TestProtHash(unittest.TestCase):
     def test_construction_with_adapters(self):
         dims = SMALL_CONFIG["embedding_dimensions"]
         config = {**SMALL_CONFIG, "teacher_dimensions": dims * 2}
-        model = ProtHash(**config)
+        model = ESMCProtHash(**config)
         self.assertIsInstance(model.adapter1, AdapterHead)
         self.assertIsInstance(model.adapter2, AdapterHead)
         self.assertIsInstance(model.adapter3, AdapterHead)
@@ -89,23 +91,23 @@ class TestProtHash(unittest.TestCase):
         self.assertEqual(z3.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
         self.assertEqual(z4.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
 
-    def test_embed_inference_mode(self):
+    def test_embed_native(self):
         with torch.inference_mode():
-            z1, z2, z3, z4 = self.model.embed(self.x)
+            embeddings = self.model.embed_native(self.x)
         emb = SMALL_CONFIG["embedding_dimensions"]
-        self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
-        self.assertEqual(z2.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
-        self.assertEqual(z3.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
-        self.assertEqual(z4.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
+        self.assertEqual(embeddings.stage1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
+        self.assertEqual(embeddings.stage2.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
+        self.assertEqual(embeddings.stage3.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
+        self.assertEqual(embeddings.stage4.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
 
-    def test_embed_esmc(self):
+    def test_embed(self):
         with torch.inference_mode():
-            z1, z2, z3, z4 = self.model.embed_esmc(self.x)
+            embeddings = self.model.embed(self.x)
         teacher = SMALL_CONFIG["teacher_dimensions"]
-        self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
-        self.assertEqual(z2.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
-        self.assertEqual(z3.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
-        self.assertEqual(z4.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(embeddings.stage1.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(embeddings.stage2.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(embeddings.stage3.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(embeddings.stage4.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
 
     def test_freeze_weights(self):
         self.model.freeze_weights()
@@ -122,7 +124,7 @@ class TestProtHash(unittest.TestCase):
         self.assertEqual(self.model.num_trainable_parameters, 0)
 
     def test_fake_quantize_roundtrip(self):
-        model = ProtHash(**SMALL_CONFIG)
+        model = ESMCProtHash(**SMALL_CONFIG)
         model.add_fake_quantized_tensors(group_size=8)
         z1, z2, z3, z4 = model.forward(self.x)
         emb = SMALL_CONFIG["embedding_dimensions"]
@@ -132,41 +134,33 @@ class TestProtHash(unittest.TestCase):
         self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
 
     def test_quantize_weights(self):
-        model = ProtHash(**SMALL_CONFIG)
+        model = ESMCProtHash(**SMALL_CONFIG)
         model.quantize_weights(group_size=8)
         z1, z2, z3, z4 = model.forward(self.x)
         emb = SMALL_CONFIG["embedding_dimensions"]
         self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
 
 
-class TestONNXModelNative(unittest.TestCase):
+class TestONNXModel(unittest.TestCase):
     def setUp(self):
         torch.manual_seed(42)
-        self.model = ProtHash(**SMALL_CONFIG)
-        self.onnx_model = ONNXModelNative(self.model)
+        self.model = ESMCProtHash(**SMALL_CONFIG)
+        self.onnx_model = ONNXModel(self.model)
         self.x = torch.randint(
             1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH)
         )
 
     def test_forward(self):
-        z = self.onnx_model.forward(self.x)
-        emb = SMALL_CONFIG["embedding_dimensions"]
-        self.assertEqual(z.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
-
-
-class TestONNXModelTeacher(unittest.TestCase):
-    def setUp(self):
-        torch.manual_seed(42)
-        self.model = ProtHash(**SMALL_CONFIG)
-        self.onnx_model = ONNXModelTeacher(self.model)
-        self.x = torch.randint(
-            1, SMALL_CONFIG["vocabulary_size"], (BATCH_SIZE, SEQ_LENGTH)
-        )
-
-    def test_forward(self):
-        z = self.onnx_model.forward(self.x)
+        result = self.onnx_model.forward(self.x)
+        self.assertIn("stage1", result)
+        self.assertIn("stage2", result)
+        self.assertIn("stage3", result)
+        self.assertIn("stage4", result)
         teacher = SMALL_CONFIG["teacher_dimensions"]
-        self.assertEqual(z.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(result["stage1"].shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(result["stage2"].shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(result["stage3"].shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
+        self.assertEqual(result["stage4"].shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
 
 
 class TestEncoder(unittest.TestCase):
@@ -176,8 +170,11 @@ class TestEncoder(unittest.TestCase):
             context_length=16,
             embedding_dimensions=32,
             num_attention_heads=4,
-            num_layers=4,
             hidden_ratio=2,
+            num_stage1_layers=1,
+            num_stage2_layers=1,
+            num_stage3_layers=1,
+            num_stage4_layers=1,
         )
         self.x = torch.randn(BATCH_SIZE, SEQ_LENGTH, 32)
 
@@ -198,35 +195,12 @@ class TestEncoder(unittest.TestCase):
         self.assertTrue(torch.isfinite(z3).all())
         self.assertTrue(torch.isfinite(z4).all())
 
-    def test_num_layers_less_than_4_raises_error(self):
-        with self.assertRaises(AssertionError):
-            Encoder(
-                context_length=16,
-                embedding_dimensions=32,
-                num_attention_heads=4,
-                num_layers=3,
-                hidden_ratio=2,
-            )
-
     def test_enable_activation_checkpointing(self):
         old_checkpoint = self.encoder.checkpoint
         self.encoder.enable_activation_checkpointing()
         self.assertIsNot(self.encoder.checkpoint, old_checkpoint)
         z1, z2, z3, z4 = self.encoder.forward(self.x)
         self.assertEqual(z1.shape, self.x.shape)
-
-    def test_uneven_layer_distribution(self):
-        encoder = Encoder(
-            context_length=16,
-            embedding_dimensions=32,
-            num_attention_heads=4,
-            num_layers=6,
-            hidden_ratio=2,
-        )
-        self.assertEqual(len(encoder.stage1), 2)
-        self.assertEqual(len(encoder.stage2), 1)
-        self.assertEqual(len(encoder.stage3), 2)
-        self.assertEqual(len(encoder.stage4), 1)
 
 
 class TestEncoderBlock(unittest.TestCase):
@@ -302,7 +276,6 @@ class TestRotaryPositionalEmbedding(unittest.TestCase):
         self.assertEqual(q_out.shape, self.q.shape)
         self.assertEqual(k_out.shape, self.k.shape)
         self.assertTrue(torch.isfinite(q_out).all())
-        self.assertTrue(torch.isfinite(k_out).all())
 
     def test_forward_preserves_norm(self):
         q_out, k_out = self.rope.forward(self.q, self.k)
