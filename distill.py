@@ -172,7 +172,7 @@ def main():
         training,
         batch_sampler=bucket_sampler,
         collate_fn=dataset.collate_pad_right,
-        pin_memory="cpu" not in args.device,
+        pin_memory="cuda" in args.device,
         snapshot_every_n_steps=args.gradient_accumulation_steps,
         num_workers=args.num_dataset_processes,
     )
@@ -183,7 +183,7 @@ def main():
         testing,
         batch_sampler=sorted_length_sampler,
         collate_fn=dataset.collate_pad_right,
-        pin_memory="cpu" not in args.device,
+        pin_memory="cuda" in args.device,
         num_workers=args.num_dataset_processes,
     )
 
@@ -309,7 +309,7 @@ def main():
         training,
         batch_sampler=bucket_sampler,
         collate_fn=dataset.collate_pad_right,
-        pin_memory="cpu" not in args.device,
+        pin_memory="cuda" in args.device,
         num_workers=args.num_dataset_processes,
     )
 
