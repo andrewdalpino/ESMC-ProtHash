@@ -27,6 +27,7 @@ from loss import (
     ContrastiveAlignmentLoss,
     WeightedCombinedLoss,
 )
+
 from metrics import CosineSimilarity, LinearCKA
 
 from tqdm import tqdm
@@ -58,28 +59,28 @@ def main():
     parser.add_argument("--learning_rate", default=3e-4, type=float)
     parser.add_argument("--anneal_learning_rate", action="store_true")
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
-    parser.add_argument("--batch_size", default=8, type=int)
-    parser.add_argument("--gradient_accumulation_steps", default=32, type=int)
-    parser.add_argument("--max_steps", default=100000, type=int)
+    parser.add_argument("--batch_size", default=16, type=int)
+    parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
+    parser.add_argument("--max_steps", default=50000, type=int)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
-    parser.add_argument("--stage1_magnitude_weight", default=0.05, type=float)
+    parser.add_argument("--stage1_magnitude_weight", default=0.0025, type=float)
     parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
-    parser.add_argument("--stage2_magnitude_weight", default=0.1, type=float)
-    parser.add_argument("--stage3_direction_weight", default=0.75, type=float)
-    parser.add_argument("--stage3_magnitude_weight", default=0.15, type=float)
-    parser.add_argument("--stage4_direction_weight", default=1.0, type=float)
-    parser.add_argument("--stage4_magnitude_weight", default=0.2, type=float)
-    parser.add_argument("--contrastive_loss_weight", default=0.01, type=float)
-    parser.add_argument("--contrastive_loss_temperature", default=0.7, type=float)
-    parser.add_argument("--contrastive_loss_queue_size", default=2048, type=int)
+    parser.add_argument("--stage2_magnitude_weight", default=0.005, type=float)
+    parser.add_argument("--stage3_direction_weight", default=1.0, type=float)
+    parser.add_argument("--stage3_magnitude_weight", default=0.01, type=float)
+    parser.add_argument("--stage4_direction_weight", default=2.0, type=float)
+    parser.add_argument("--stage4_magnitude_weight", default=0.02, type=float)
+    parser.add_argument("--contrastive_loss_weight", default=0.0005, type=float)
+    parser.add_argument("--contrastive_loss_temperature", default=0.07, type=float)
+    parser.add_argument("--contrastive_loss_queue_size", default=16384, type=int)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=8, type=int)
     parser.add_argument("--hidden_ratio", default=4, type=int)
     parser.add_argument("--num_stage1_layers", default=3, type=int)
     parser.add_argument("--num_stage2_layers", default=3, type=int)
-    parser.add_argument("--num_stage3_layers", default=4, type=int)
-    parser.add_argument("--num_stage4_layers", default=5, type=int)
+    parser.add_argument("--num_stage3_layers", default=3, type=int)
+    parser.add_argument("--num_stage4_layers", default=3, type=int)
     parser.add_argument("--eval_interval", default=200, type=int)
     parser.add_argument("--num_eval_samples", default=10000, type=int)
     parser.add_argument("--checkpoint_interval", default=200, type=int)
@@ -302,6 +303,34 @@ def main():
 
     num_batches = 0
 
+    print("Prefilling contrastive loss queue")
+
+    prefill_loader = DataLoader(
+        training,
+        batch_sampler=bucket_sampler,
+        collate_fn=dataset.collate_pad_right,
+        pin_memory="cpu" not in args.device,
+        num_workers=args.num_dataset_processes,
+    )
+
+    with torch.no_grad():
+        for x in tqdm(prefill_loader, desc="Prefilling"):
+            x = x.to(args.device, non_blocking=True)
+
+            mask = x != tokenizer.pad_token_id
+
+            with amp_context:
+                out_teacher = teacher.forward(x)
+
+            y4_teacher = out_teacher.hidden_states[anchor_points[3]]
+
+            contrastive_loss_function.prefill_queue(y4_teacher, mask)
+
+            if contrastive_loss_function.queue_filled:
+                break
+
+    del prefill_loader
+
     print("Distilling ...")
 
     progress_bar = new_progress_bar(desc=f"Step {step:,}")
@@ -442,7 +471,6 @@ def main():
             )
 
             logger.add_scalar("Contrastive Loss", average_contrastive_loss, step)
-
             logger.add_scalar("Gradient Norm", gradient_norm, step)
 
             print(
@@ -493,17 +521,25 @@ def main():
                     y3_teacher = out_teacher.hidden_states[anchor_points[2]]
                     y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-                    y1_student, y2_student, y3_student, y4_student = student.embed(x)
+                    embeddings = student.embed(x)
 
-                    stage1_cosine_similarity_metric.update(y1_student, y1_teacher, mask)
-                    stage2_cosine_similarity_metric.update(y2_student, y2_teacher, mask)
-                    stage3_cosine_similarity_metric.update(y3_student, y3_teacher, mask)
-                    stage4_cosine_similarity_metric.update(y4_student, y4_teacher, mask)
+                    stage1_cosine_similarity_metric.update(
+                        embeddings.stage1, y1_teacher, mask
+                    )
+                    stage2_cosine_similarity_metric.update(
+                        embeddings.stage2, y2_teacher, mask
+                    )
+                    stage3_cosine_similarity_metric.update(
+                        embeddings.stage3, y3_teacher, mask
+                    )
+                    stage4_cosine_similarity_metric.update(
+                        embeddings.stage4, y4_teacher, mask
+                    )
 
-                    stage1_linear_cka_metric.update(y1_student, y1_teacher, mask)
-                    stage2_linear_cka_metric.update(y2_student, y2_teacher, mask)
-                    stage3_linear_cka_metric.update(y3_student, y3_teacher, mask)
-                    stage4_linear_cka_metric.update(y4_student, y4_teacher, mask)
+                    stage1_linear_cka_metric.update(embeddings.stage1, y1_teacher, mask)
+                    stage2_linear_cka_metric.update(embeddings.stage2, y2_teacher, mask)
+                    stage3_linear_cka_metric.update(embeddings.stage3, y3_teacher, mask)
+                    stage4_linear_cka_metric.update(embeddings.stage4, y4_teacher, mask)
 
                 average_stage1_cosine_similarity = (
                     stage1_cosine_similarity_metric.compute()

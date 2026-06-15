@@ -80,6 +80,44 @@ class ContrastiveAlignmentLoss(Module):
         self.queue_pointer = 0
         self.queue_filled = False
 
+    @torch.no_grad()
+    def prefill_queue(self, y_teacher: Tensor, mask: Tensor) -> None:
+        mask = mask.unsqueeze(-1)
+
+        teacher_pooled = (y_teacher * mask).sum(dim=1)
+
+        sequence_lengths = mask.sum(dim=1)
+
+        assert (
+            sequence_lengths > 0
+        ).all(), "Each sequence must have at least one unmasked position."
+
+        teacher_pooled = teacher_pooled / sequence_lengths
+
+        teacher_norm = teacher_pooled.norm(dim=-1, keepdim=True)
+        teacher_norm = teacher_norm.clamp(min=self.norm_epsilon)
+
+        teacher_pooled_normalized = teacher_pooled / teacher_norm
+
+        _ = self._update_queue(teacher_pooled_normalized)
+
+    @torch.no_grad()
+    def _update_queue(self, teacher_pooled_normalized: Tensor) -> Tensor:
+        n = teacher_pooled_normalized.size(0)
+
+        pointer_end = self.queue_pointer + n
+
+        indices = torch.arange(self.queue_pointer, pointer_end) % self.queue_size
+
+        self.queue[indices] = teacher_pooled_normalized.to(self.queue.dtype)
+
+        self.queue_pointer = pointer_end % self.queue_size
+
+        if pointer_end >= self.queue_size:
+            self.queue_filled = True
+
+        return indices
+
     def forward(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor) -> Tensor:
         assert (
             y_student.size() == y_teacher.size()
@@ -108,19 +146,7 @@ class ContrastiveAlignmentLoss(Module):
         student_pooled_normalized = student_pooled / student_norm
         teacher_pooled_normalized = teacher_pooled / teacher_norm
 
-        with torch.no_grad():
-            n = teacher_pooled_normalized.size(0)
-
-            pointer_end = self.queue_pointer + n
-
-            indices = torch.arange(self.queue_pointer, pointer_end) % self.queue_size
-
-            self.queue[indices] = teacher_pooled_normalized.detach()
-
-            self.queue_pointer = pointer_end % self.queue_size
-
-            if pointer_end >= self.queue_size:
-                self.queue_filled = True
+        indices = self._update_queue(teacher_pooled_normalized)
 
         teacher_pooled_normalized = (
             self.queue if self.queue_filled else self.queue[: self.queue_pointer]

@@ -30,6 +30,16 @@ from torchao.quantization.qat import (
 from huggingface_hub import PyTorchModelHubMixin
 
 
+class Embeddings:
+    """A wrapper for multi-stage contextual embeddings."""
+
+    def __init__(self, stage1: Tensor, stage2: Tensor, stage3: Tensor, stage4: Tensor):
+        self.stage1 = stage1
+        self.stage2 = stage2
+        self.stage3 = stage3
+        self.stage4 = stage4
+
+
 class ESMCProtHash(Module, PyTorchModelHubMixin):
     """
     An encoder-only transformer model for protein sequence embedding with adapter heads
@@ -148,7 +158,7 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         return z1, z2, z3, z4
 
     @torch.inference_mode()
-    def embed_native(self, x: Tensor) -> tuple[Tensor, ...]:
+    def embed_native(self, x: Tensor) -> Embeddings:
         """
         Output the contextual embeddings of the input sequence in native embedding dimensionality.
 
@@ -156,15 +166,17 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             x (Tensor): The token index sequence of shape (batch_size, sequence_length).
 
         Returns:
-            tuple[Tensor, ...]: The contextual embeddings of shape (batch_size, embedding_dimensions).
+            Embeddings: The contextual embeddings of shape (batch_size, embedding_dimensions).
         """
 
         z1, z2, z3, z4 = self.forward(x)
 
-        return z1, z2, z3, z4
+        embeddings = Embeddings(z1, z2, z3, z4)
+
+        return embeddings
 
     @torch.inference_mode()
-    def embed(self, x: Tensor) -> tuple[Tensor, ...]:
+    def embed(self, x: Tensor) -> Embeddings:
         """
         Output the contextual embeddings of the input sequence in the teacher's dimensionality.
 
@@ -172,12 +184,14 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             x (Tensor): The token index sequence of shape (batch_size, sequence_length).
 
         Returns:
-            tuple[Tensor, ...]: The contextual embeddings of shape (batch_size, teacher_dimensions).
+            Embeddings: The contextual embeddings of shape (batch_size, teacher_dimensions).
         """
 
         z1, z2, z3, z4 = self.forward_with_adapters(x)
 
-        return z1, z2, z3, z4
+        embeddings = Embeddings(z1, z2, z3, z4)
+
+        return embeddings
 
 
 class ONNXModel(Module):
@@ -191,10 +205,15 @@ class ONNXModel(Module):
 
         self.model = model
 
-    def forward(self, x: Tensor) -> tuple[Tensor, ...]:
-        z1, z2, z3, z4 = self.model.embed(x)
+    def forward(self, x: Tensor) -> dict[str, Tensor]:
+        embeddings = self.model.embed(x)
 
-        return z1, z2, z3, z4
+        return {
+            "stage1": embeddings.stage1,
+            "stage2": embeddings.stage2,
+            "stage3": embeddings.stage3,
+            "stage4": embeddings.stage4,
+        }
 
 
 class Encoder(Module):
@@ -216,12 +235,15 @@ class Encoder(Module):
         assert (
             num_stage1_layers >= 1
         ), "Number of stage 1 layers must be greater than 0."
+
         assert (
             num_stage2_layers >= 1
         ), "Number of stage 2 layers must be greater than 0."
+
         assert (
             num_stage3_layers >= 1
         ), "Number of stage 3 layers must be greater than 0."
+
         assert (
             num_stage4_layers >= 1
         ), "Number of stage 4 layers must be greater than 0."
