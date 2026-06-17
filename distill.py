@@ -22,13 +22,7 @@ from esm.models.esmc import ESMC
 from src.prothash.model import ESMCProtHash
 
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
-
-from loss import (
-    DecomposedTokenRepresentationLoss,
-    DecomposedSequenceRepresentationLoss,
-    WeightedCombinedLoss,
-)
-
+from loss import DecomposedTokenRepresentationLoss, WeightedCombinedLoss
 from metrics import CosineSimilarity, LinearCKA
 
 from tqdm import tqdm
@@ -36,8 +30,8 @@ from tqdm import tqdm
 AVAILABLE_TEACHERS = {"esmc_300m", "esmc_600m"}
 
 TEACHER_LAYER_ANCHOR_POINTS = {
-    "esmc_300m": (7, 15, 23, 29),
-    "esmc_600m": (8, 17, 26, 35),
+    "esmc_300m": (7, 16, 23, 29),
+    "esmc_600m": (8, 18, 26, 35),
 }
 
 
@@ -63,26 +57,14 @@ def main():
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
     parser.add_argument("--max_steps", default=50000, type=int)
-    parser.add_argument("--stage1_token_direction_weight", default=0.25, type=float)
-    parser.add_argument("--stage1_token_magnitude_weight", default=0.0025, type=float)
-    parser.add_argument("--stage1_sequence_direction_weight", default=0.25, type=float)
-
-    parser.add_argument(
-        "--stage1_sequence_magnitude_weight", default=0.0025, type=float
-    )
-
-    parser.add_argument("--stage2_token_direction_weight", default=0.5, type=float)
-    parser.add_argument("--stage2_token_magnitude_weight", default=0.005, type=float)
-    parser.add_argument("--stage2_sequence_direction_weight", default=0.5, type=float)
-    parser.add_argument("--stage2_sequence_magnitude_weight", default=0.005, type=float)
-    parser.add_argument("--stage3_token_direction_weight", default=1.0, type=float)
-    parser.add_argument("--stage3_token_magnitude_weight", default=0.01, type=float)
-    parser.add_argument("--stage3_sequence_direction_weight", default=1.0, type=float)
-    parser.add_argument("--stage3_sequence_magnitude_weight", default=0.01, type=float)
-    parser.add_argument("--stage4_token_direction_weight", default=2.0, type=float)
-    parser.add_argument("--stage4_token_magnitude_weight", default=0.02, type=float)
-    parser.add_argument("--stage4_sequence_direction_weight", default=2.0, type=float)
-    parser.add_argument("--stage4_sequence_magnitude_weight", default=0.02, type=float)
+    parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
+    parser.add_argument("--stage1_magnitude_weight", default=0.0025, type=float)
+    parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
+    parser.add_argument("--stage2_magnitude_weight", default=0.005, type=float)
+    parser.add_argument("--stage3_direction_weight", default=1.0, type=float)
+    parser.add_argument("--stage3_magnitude_weight", default=0.01, type=float)
+    parser.add_argument("--stage4_direction_weight", default=2.0, type=float)
+    parser.add_argument("--stage4_magnitude_weight", default=0.02, type=float)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=8, type=int)
@@ -233,32 +215,18 @@ def main():
 
     print(f"Number of parameters: {student.num_params:,}")
 
-    decomposed_token_loss_function = DecomposedTokenRepresentationLoss(
-        args.loss_norm_epsilon
-    )
-
-    decomposed_sequence_loss_function = DecomposedSequenceRepresentationLoss(
-        args.loss_norm_epsilon
-    )
+    loss_function = DecomposedTokenRepresentationLoss(args.loss_norm_epsilon)
 
     combined_loss_function = WeightedCombinedLoss(
         [
-            args.stage1_token_direction_weight,
-            args.stage1_token_magnitude_weight,
-            args.stage1_sequence_direction_weight,
-            args.stage1_sequence_magnitude_weight,
-            args.stage2_token_direction_weight,
-            args.stage2_token_magnitude_weight,
-            args.stage2_sequence_direction_weight,
-            args.stage2_sequence_magnitude_weight,
-            args.stage3_token_direction_weight,
-            args.stage3_token_magnitude_weight,
-            args.stage3_sequence_direction_weight,
-            args.stage3_sequence_magnitude_weight,
-            args.stage4_token_direction_weight,
-            args.stage4_token_magnitude_weight,
-            args.stage4_sequence_direction_weight,
-            args.stage4_sequence_magnitude_weight,
+            args.stage1_direction_weight,
+            args.stage1_magnitude_weight,
+            args.stage2_direction_weight,
+            args.stage2_magnitude_weight,
+            args.stage3_direction_weight,
+            args.stage3_magnitude_weight,
+            args.stage4_direction_weight,
+            args.stage4_magnitude_weight,
         ]
     )
 
@@ -307,21 +275,10 @@ def main():
         leave=False,
     )
 
-    total_stage1_token_direction_loss, total_stage2_token_direction_loss = 0.0, 0.0
-    total_stage3_token_direction_loss, total_stage4_token_direction_loss = 0.0, 0.0
-
-    total_stage1_token_magnitude_loss, total_stage2_token_magnitude_loss = 0.0, 0.0
-    total_stage3_token_magnitude_loss, total_stage4_token_magnitude_loss = 0.0, 0.0
-
-    total_stage1_sequence_direction_loss = 0.0
-    total_stage2_sequence_direction_loss = 0.0
-    total_stage3_sequence_direction_loss = 0.0
-    total_stage4_sequence_direction_loss = 0.0
-
-    total_stage1_sequence_magnitude_loss = 0.0
-    total_stage2_sequence_magnitude_loss = 0.0
-    total_stage3_sequence_magnitude_loss = 0.0
-    total_stage4_sequence_magnitude_loss = 0.0
+    total_stage1_direction_loss, total_stage1_magnitude_loss = 0.0, 0.0
+    total_stage2_direction_loss, total_stage2_magnitude_loss = 0.0, 0.0
+    total_stage3_direction_loss, total_stage3_magnitude_loss = 0.0, 0.0
+    total_stage4_direction_loss, total_stage4_magnitude_loss = 0.0, 0.0
 
     num_batches = 0
 
@@ -351,57 +308,33 @@ def main():
             y3_teacher = out_teacher.hidden_states[anchor_points[2]]
             y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-            stage1_token_direction_loss, stage1_token_magnitude_loss = (
-                decomposed_token_loss_function.forward(y1_student, y1_teacher, mask)
+            stage1_direction_loss, stage1_magnitude_loss = loss_function.forward(
+                y1_student, y1_teacher, mask
             )
 
-            stage1_sequence_direction_loss, stage1_sequence_magnitude_loss = (
-                decomposed_sequence_loss_function.forward(y1_student, y1_teacher, mask)
+            stage2_direction_loss, stage2_magnitude_loss = loss_function.forward(
+                y2_student, y2_teacher, mask
             )
 
-            stage2_token_direction_loss, stage2_token_magnitude_loss = (
-                decomposed_token_loss_function.forward(y2_student, y2_teacher, mask)
+            stage3_direction_loss, stage3_magnitude_loss = loss_function.forward(
+                y3_student, y3_teacher, mask
             )
 
-            stage2_sequence_direction_loss, stage2_sequence_magnitude_loss = (
-                decomposed_sequence_loss_function.forward(y2_student, y2_teacher, mask)
-            )
-
-            stage3_token_direction_loss, stage3_token_magnitude_loss = (
-                decomposed_token_loss_function.forward(y3_student, y3_teacher, mask)
-            )
-
-            stage3_sequence_direction_loss, stage3_sequence_magnitude_loss = (
-                decomposed_sequence_loss_function.forward(y3_student, y3_teacher, mask)
-            )
-
-            stage4_token_direction_loss, stage4_token_magnitude_loss = (
-                decomposed_token_loss_function.forward(y4_student, y4_teacher, mask)
-            )
-
-            stage4_sequence_direction_loss, stage4_sequence_magnitude_loss = (
-                decomposed_sequence_loss_function.forward(y4_student, y4_teacher, mask)
+            stage4_direction_loss, stage4_magnitude_loss = loss_function.forward(
+                y4_student, y4_teacher, mask
             )
 
             combined_loss = combined_loss_function.forward(
                 torch.stack(
                     [
-                        stage1_token_direction_loss,
-                        stage1_token_magnitude_loss,
-                        stage1_sequence_direction_loss,
-                        stage1_sequence_magnitude_loss,
-                        stage2_token_direction_loss,
-                        stage2_token_magnitude_loss,
-                        stage2_sequence_direction_loss,
-                        stage2_sequence_magnitude_loss,
-                        stage3_token_direction_loss,
-                        stage3_token_magnitude_loss,
-                        stage3_sequence_direction_loss,
-                        stage3_sequence_magnitude_loss,
-                        stage4_token_direction_loss,
-                        stage4_token_magnitude_loss,
-                        stage4_sequence_direction_loss,
-                        stage4_sequence_magnitude_loss,
+                        stage1_direction_loss,
+                        stage1_magnitude_loss,
+                        stage2_direction_loss,
+                        stage2_magnitude_loss,
+                        stage3_direction_loss,
+                        stage3_magnitude_loss,
+                        stage4_direction_loss,
+                        stage4_magnitude_loss,
                     ]
                 )
             )
@@ -410,25 +343,14 @@ def main():
 
         scaled_loss.backward()
 
-        total_stage1_token_direction_loss += stage1_token_direction_loss.item()
-        total_stage2_token_direction_loss += stage2_token_direction_loss.item()
-        total_stage3_token_direction_loss += stage3_token_direction_loss.item()
-        total_stage4_token_direction_loss += stage4_token_direction_loss.item()
-
-        total_stage1_token_magnitude_loss += stage1_token_magnitude_loss.item()
-        total_stage2_token_magnitude_loss += stage2_token_magnitude_loss.item()
-        total_stage3_token_magnitude_loss += stage3_token_magnitude_loss.item()
-        total_stage4_token_magnitude_loss += stage4_token_magnitude_loss.item()
-
-        total_stage1_sequence_direction_loss += stage1_sequence_direction_loss.item()
-        total_stage2_sequence_direction_loss += stage2_sequence_direction_loss.item()
-        total_stage3_sequence_direction_loss += stage3_sequence_direction_loss.item()
-        total_stage4_sequence_direction_loss += stage4_sequence_direction_loss.item()
-
-        total_stage1_sequence_magnitude_loss += stage1_sequence_magnitude_loss.item()
-        total_stage2_sequence_magnitude_loss += stage2_sequence_magnitude_loss.item()
-        total_stage3_sequence_magnitude_loss += stage3_sequence_magnitude_loss.item()
-        total_stage4_sequence_magnitude_loss += stage4_sequence_magnitude_loss.item()
+        total_stage1_direction_loss += stage1_direction_loss.item()
+        total_stage1_magnitude_loss += stage1_magnitude_loss.item()
+        total_stage2_direction_loss += stage2_direction_loss.item()
+        total_stage2_magnitude_loss += stage2_magnitude_loss.item()
+        total_stage3_direction_loss += stage3_direction_loss.item()
+        total_stage3_magnitude_loss += stage3_magnitude_loss.item()
+        total_stage4_direction_loss += stage4_direction_loss.item()
+        total_stage4_magnitude_loss += stage4_magnitude_loss.item()
 
         num_batches += 1
 
@@ -445,194 +367,73 @@ def main():
 
             progress_bar.close()
 
-            average_stage1_token_direction_loss = (
-                total_stage1_token_direction_loss / num_batches
-            )
-
-            average_stage2_token_direction_loss = (
-                total_stage2_token_direction_loss / num_batches
-            )
-
-            average_stage3_token_direction_loss = (
-                total_stage3_token_direction_loss / num_batches
-            )
-
-            average_stage4_token_direction_loss = (
-                total_stage4_token_direction_loss / num_batches
-            )
-
-            average_stage1_token_magnitude_loss = (
-                total_stage1_token_magnitude_loss / num_batches
-            )
-
-            average_stage2_token_magnitude_loss = (
-                total_stage2_token_magnitude_loss / num_batches
-            )
-
-            average_stage3_token_magnitude_loss = (
-                total_stage3_token_magnitude_loss / num_batches
-            )
-
-            average_stage4_token_magnitude_loss = (
-                total_stage4_token_magnitude_loss / num_batches
-            )
-
-            average_stage1_sequence_direction_loss = (
-                total_stage1_sequence_direction_loss / num_batches
-            )
-
-            average_stage2_sequence_direction_loss = (
-                total_stage2_sequence_direction_loss / num_batches
-            )
-
-            average_stage3_sequence_direction_loss = (
-                total_stage3_sequence_direction_loss / num_batches
-            )
-
-            average_stage4_sequence_direction_loss = (
-                total_stage4_sequence_direction_loss / num_batches
-            )
-
-            average_stage1_sequence_magnitude_loss = (
-                total_stage1_sequence_magnitude_loss / num_batches
-            )
-
-            average_stage2_sequence_magnitude_loss = (
-                total_stage2_sequence_magnitude_loss / num_batches
-            )
-
-            average_stage3_sequence_magnitude_loss = (
-                total_stage3_sequence_magnitude_loss / num_batches
-            )
-
-            average_stage4_sequence_magnitude_loss = (
-                total_stage4_sequence_magnitude_loss / num_batches
-            )
+            average_stage1_direction_loss = total_stage1_direction_loss / num_batches
+            average_stage1_magnitude_loss = total_stage1_magnitude_loss / num_batches
+            average_stage2_direction_loss = total_stage2_direction_loss / num_batches
+            average_stage2_magnitude_loss = total_stage2_magnitude_loss / num_batches
+            average_stage3_direction_loss = total_stage3_direction_loss / num_batches
+            average_stage3_magnitude_loss = total_stage3_magnitude_loss / num_batches
+            average_stage4_direction_loss = total_stage4_direction_loss / num_batches
+            average_stage4_magnitude_loss = total_stage4_magnitude_loss / num_batches
 
             gradient_norm = norm.item()
 
             logger.add_scalar(
-                "Stage 1 Token Direction L2", average_stage1_token_direction_loss, step
+                "Stage 1 Direction L2", average_stage1_direction_loss, step
             )
 
             logger.add_scalar(
-                "Stage 1 Token Magnitude L2", average_stage1_token_magnitude_loss, step
+                "Stage 1 Magnitude L2", average_stage1_magnitude_loss, step
             )
 
             logger.add_scalar(
-                "Stage 1 Sequence Direction L2",
-                average_stage1_sequence_direction_loss,
-                step,
+                "Stage 2 Direction L2", average_stage2_direction_loss, step
             )
 
             logger.add_scalar(
-                "Stage 1 Sequence Magnitude L2",
-                average_stage1_sequence_magnitude_loss,
-                step,
+                "Stage 2 Magnitude L2", average_stage2_magnitude_loss, step
             )
 
             logger.add_scalar(
-                "Stage 2 Token Direction L2", average_stage2_token_direction_loss, step
+                "Stage 3 Direction L2", average_stage3_direction_loss, step
             )
 
             logger.add_scalar(
-                "Stage 2 Token Magnitude L2", average_stage2_token_magnitude_loss, step
+                "Stage 3 Magnitude L2", average_stage3_magnitude_loss, step
             )
 
             logger.add_scalar(
-                "Stage 2 Sequence Direction L2",
-                average_stage2_sequence_direction_loss,
-                step,
+                "Stage 4 Direction L2", average_stage4_direction_loss, step
             )
 
             logger.add_scalar(
-                "Stage 2 Sequence Magnitude L2",
-                average_stage2_sequence_magnitude_loss,
-                step,
-            )
-
-            logger.add_scalar(
-                "Stage 3 Token Direction L2", average_stage3_token_direction_loss, step
-            )
-
-            logger.add_scalar(
-                "Stage 3 Token Magnitude L2", average_stage3_token_magnitude_loss, step
-            )
-
-            logger.add_scalar(
-                "Stage 3 Sequence Direction L2",
-                average_stage3_sequence_direction_loss,
-                step,
-            )
-
-            logger.add_scalar(
-                "Stage 3 Sequence Magnitude L2",
-                average_stage3_sequence_magnitude_loss,
-                step,
-            )
-
-            logger.add_scalar(
-                "Stage 4 Token Direction L2", average_stage4_token_direction_loss, step
-            )
-
-            logger.add_scalar(
-                "Stage 4 Token Magnitude L2", average_stage4_token_magnitude_loss, step
-            )
-
-            logger.add_scalar(
-                "Stage 4 Sequence Direction L2",
-                average_stage4_sequence_direction_loss,
-                step,
-            )
-
-            logger.add_scalar(
-                "Stage 4 Sequence Magnitude L2",
-                average_stage4_sequence_magnitude_loss,
-                step,
+                "Stage 4 Magnitude L2", average_stage4_magnitude_loss, step
             )
 
             logger.add_scalar("Gradient Norm", gradient_norm, step)
 
             print(
                 f"Step {step:,}:",
-                f"Stage 1 Token Direction L2: {average_stage1_token_direction_loss:.5f},",
-                f"Stage 1 Token Magnitude L2: {average_stage1_token_magnitude_loss:.5f},",
-                f"Stage 1 Sequence Direction L2: {average_stage1_sequence_direction_loss:.5f},",
-                f"Stage 1 Sequence Magnitude L2: {average_stage1_sequence_magnitude_loss:.5f},",
-                f"Stage 2 Token Direction L2: {average_stage2_token_direction_loss:.5f},",
-                f"Stage 2 Token Magnitude L2: {average_stage2_token_magnitude_loss:.5f},",
-                f"Stage 2 Sequence Direction L2: {average_stage2_sequence_direction_loss:.5f},",
-                f"Stage 2 Sequence Magnitude L2: {average_stage2_sequence_magnitude_loss:.5f},",
-                f"Stage 3 Token Direction L2: {average_stage3_token_direction_loss:.5f},",
-                f"Stage 3 Token Magnitude L2: {average_stage3_token_magnitude_loss:.5f},",
-                f"Stage 3 Sequence Direction L2: {average_stage3_sequence_direction_loss:.5f},",
-                f"Stage 3 Sequence Magnitude L2: {average_stage3_sequence_magnitude_loss:.5f},",
-                f"Stage 4 Token Direction L2: {average_stage4_token_direction_loss:.5f},",
-                f"Stage 4 Token Magnitude L2: {average_stage4_token_magnitude_loss:.5f},",
-                f"Stage 4 Sequence Direction L2: {average_stage4_sequence_direction_loss:.5f},",
-                f"Stage 4 Sequence Magnitude L2: {average_stage4_sequence_magnitude_loss:.5f},",
+                f"Stage 1 Direction L2: {average_stage1_direction_loss:.5f},",
+                f"Stage 1 Magnitude L2: {average_stage1_magnitude_loss:.5f},",
+                f"Stage 2 Direction L2: {average_stage2_direction_loss:.5f},",
+                f"Stage 2 Magnitude L2: {average_stage2_magnitude_loss:.5f},",
+                f"Stage 3 Direction L2: {average_stage3_direction_loss:.5f},",
+                f"Stage 3 Magnitude L2: {average_stage3_magnitude_loss:.5f},",
+                f"Stage 4 Direction L2: {average_stage4_direction_loss:.5f},",
+                f"Stage 4 Magnitude L2: {average_stage4_magnitude_loss:.5f},",
                 f"Gradient Norm: {gradient_norm:.5f}",
             )
 
-            total_stage1_token_direction_loss = 0.0
-            total_stage2_token_direction_loss = 0.0
-            total_stage3_token_direction_loss = 0.0
-            total_stage4_token_direction_loss = 0.0
+            total_stage1_direction_loss = 0.0
+            total_stage2_direction_loss = 0.0
+            total_stage3_direction_loss = 0.0
+            total_stage4_direction_loss = 0.0
 
-            total_stage1_token_magnitude_loss = 0.0
-            total_stage2_token_magnitude_loss = 0.0
-            total_stage3_token_magnitude_loss = 0.0
-            total_stage4_token_magnitude_loss = 0.0
-
-            total_stage1_sequence_direction_loss = 0.0
-            total_stage2_sequence_direction_loss = 0.0
-            total_stage3_sequence_direction_loss = 0.0
-            total_stage4_sequence_direction_loss = 0.0
-
-            total_stage1_sequence_magnitude_loss = 0.0
-            total_stage2_sequence_magnitude_loss = 0.0
-            total_stage3_sequence_magnitude_loss = 0.0
-            total_stage4_sequence_magnitude_loss = 0.0
+            total_stage1_magnitude_loss = 0.0
+            total_stage2_magnitude_loss = 0.0
+            total_stage3_magnitude_loss = 0.0
+            total_stage4_magnitude_loss = 0.0
 
             num_batches = 0
 

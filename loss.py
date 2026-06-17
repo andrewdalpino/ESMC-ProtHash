@@ -44,56 +44,6 @@ class DecomposedTokenRepresentationLoss(Module):
         return direction_loss, magnitude_loss
 
 
-class DecomposedSequenceRepresentationLoss(Module):
-    """
-    MSE loss decomposed into independent direction and magnitude components
-    at the sequence level. Token embeddings are mean-pooled over non-padding
-    positions before computing the decomposed loss.
-    """
-
-    def __init__(self, norm_epsilon: float):
-        super().__init__()
-
-        assert norm_epsilon > 0, "Epsilon must be a positive value."
-
-        self.norm_epsilon = norm_epsilon
-
-    def forward(
-        self, y_student: Tensor, y_teacher: Tensor, mask: Tensor
-    ) -> tuple[Tensor, Tensor]:
-        assert (
-            y_student.size() == y_teacher.size()
-        ), "y_student and y_teacher must have the same dimensionality."
-
-        mask = mask.unsqueeze(-1)
-
-        sequence_lengths = mask.sum(dim=1)
-
-        assert (
-            sequence_lengths > 0
-        ).all(), "All sequences must have at least one token."
-
-        student_pooled = (y_student * mask).sum(dim=1) / sequence_lengths
-        teacher_pooled = (y_teacher * mask).sum(dim=1) / sequence_lengths
-
-        student_norm = student_pooled.norm(dim=-1, keepdim=True)
-        teacher_norm = teacher_pooled.norm(dim=-1, keepdim=True)
-
-        student_norm = student_norm.clamp(min=self.norm_epsilon)
-        teacher_norm = teacher_norm.clamp(min=self.norm_epsilon)
-
-        student_normalized = student_pooled / student_norm
-        teacher_normalized = teacher_pooled / teacher_norm
-
-        direction_loss = (student_normalized - teacher_normalized).pow(2)
-        magnitude_loss = ((student_norm - teacher_norm) / teacher_norm).pow(2)
-
-        direction_loss = direction_loss.mean()
-        magnitude_loss = magnitude_loss.mean()
-
-        return direction_loss, magnitude_loss
-
-
 class WeightedCombinedLoss(Module):
     def __init__(self, weights: list[float]):
         super().__init__()
