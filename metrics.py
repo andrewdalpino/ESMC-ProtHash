@@ -14,8 +14,8 @@ class CosineSimilarity:
         self.reset()
 
     def reset(self):
-        self.total_similarity = torch.tensor(0.0)
-        self.num_samples = torch.tensor(0)
+        self.total_similarity = 0.0
+        self.num_samples = 0
 
     def update(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor):
         assert (
@@ -31,6 +31,7 @@ class CosineSimilarity:
 
     def compute(self) -> Tensor:
         assert self.num_samples > 0, "No updates have been made yet."
+        assert isinstance(self.total_similarity, Tensor)
 
         score = self.total_similarity / self.num_samples
 
@@ -160,9 +161,9 @@ class Top1MacroF1:
                 device=indices.device,
             )
 
-        self.confusion_matrix += torch.bincount(indices, minlength=n_classes**2).view(
-            n_classes, n_classes
-        )
+        counts = torch.bincount(indices, minlength=n_classes**2)
+
+        self.confusion_matrix += counts.view(n_classes, n_classes)
 
     def compute(self) -> tuple[Tensor, Tensor, Tensor]:
         assert self.confusion_matrix is not None, "No updates have been made yet."
@@ -187,6 +188,7 @@ class Top1MacroF1:
             torch.zeros_like(precision),
         )
 
+        # Exclude classes that have no predictions or true labels.
         present = (sigma_r > 0) | (sigma_p > 0)
 
         precision = precision[present].mean()
