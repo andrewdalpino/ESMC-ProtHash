@@ -23,7 +23,7 @@ from src.prothash.model import ESMCProtHash
 
 from data import UniRef50, LengthBucketBatchSampler, SortedLengthBatchSampler
 from loss import DecomposedTokenRepresentationLoss, WeightedCombinedLoss
-from metrics import CosineSimilarity, LinearCKA
+from metrics import CosineSimilarity, LinearCKA, Top1MacroF1
 
 from tqdm import tqdm
 
@@ -65,6 +65,8 @@ def main():
     parser.add_argument("--stage3_magnitude_weight", default=0.01, type=float)
     parser.add_argument("--stage4_direction_weight", default=2.0, type=float)
     parser.add_argument("--stage4_magnitude_weight", default=0.02, type=float)
+    parser.add_argument("--stage5_direction_weight", default=0.1, type=float)
+    parser.add_argument("--stage5_magnitude_weight", default=0.001, type=float)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
     parser.add_argument("--embedding_dimensions", default=512, type=int)
     parser.add_argument("--num_attention_heads", default=8, type=int)
@@ -227,6 +229,8 @@ def main():
             args.stage3_magnitude_weight,
             args.stage4_direction_weight,
             args.stage4_magnitude_weight,
+            args.stage5_direction_weight,
+            args.stage5_magnitude_weight,
         ]
     )
 
@@ -269,6 +273,8 @@ def main():
     stage3_linear_cka_metric = LinearCKA()
     stage4_linear_cka_metric = LinearCKA()
 
+    f1_metric = Top1MacroF1()
+
     new_progress_bar = partial(
         tqdm,
         total=args.gradient_accumulation_steps,
@@ -279,6 +285,7 @@ def main():
     total_stage2_direction_loss, total_stage2_magnitude_loss = 0.0, 0.0
     total_stage3_direction_loss, total_stage3_magnitude_loss = 0.0, 0.0
     total_stage4_direction_loss, total_stage4_magnitude_loss = 0.0, 0.0
+    total_stage5_direction_loss, total_stage5_magnitude_loss = 0.0, 0.0
 
     num_batches = 0
 
@@ -295,7 +302,7 @@ def main():
             with torch.no_grad():
                 out_teacher = teacher.forward(x)
 
-            y1_student, y2_student, y3_student, y4_student = (
+            y1_student, y2_student, y3_student, y4_student, y5_student = (
                 student.forward_with_adapters(x)
             )
 
@@ -307,6 +314,9 @@ def main():
             y2_teacher = out_teacher.hidden_states[anchor_points[1]]
             y3_teacher = out_teacher.hidden_states[anchor_points[2]]
             y4_teacher = out_teacher.hidden_states[anchor_points[3]]
+
+            # Trim off unused vocabulary tokens.
+            y5_teacher = out_teacher.sequence_logits[..., : tokenizer.vocab_size]
 
             stage1_direction_loss, stage1_magnitude_loss = loss_function.forward(
                 y1_student, y1_teacher, mask
@@ -324,6 +334,10 @@ def main():
                 y4_student, y4_teacher, mask
             )
 
+            stage5_direction_loss, stage5_magnitude_loss = loss_function.forward(
+                y5_student, y5_teacher, mask
+            )
+
             combined_loss = combined_loss_function.forward(
                 torch.stack(
                     [
@@ -335,6 +349,8 @@ def main():
                         stage3_magnitude_loss,
                         stage4_direction_loss,
                         stage4_magnitude_loss,
+                        stage5_direction_loss,
+                        stage5_magnitude_loss,
                     ]
                 )
             )
@@ -351,6 +367,8 @@ def main():
         total_stage3_magnitude_loss += stage3_magnitude_loss.item()
         total_stage4_direction_loss += stage4_direction_loss.item()
         total_stage4_magnitude_loss += stage4_magnitude_loss.item()
+        total_stage5_direction_loss += stage5_direction_loss.item()
+        total_stage5_magnitude_loss += stage5_magnitude_loss.item()
 
         num_batches += 1
 
@@ -375,6 +393,8 @@ def main():
             average_stage3_magnitude_loss = total_stage3_magnitude_loss / num_batches
             average_stage4_direction_loss = total_stage4_direction_loss / num_batches
             average_stage4_magnitude_loss = total_stage4_magnitude_loss / num_batches
+            average_stage5_direction_loss = total_stage5_direction_loss / num_batches
+            average_stage5_magnitude_loss = total_stage5_magnitude_loss / num_batches
 
             gradient_norm = norm.item()
 
@@ -410,6 +430,14 @@ def main():
                 "Stage 4 Magnitude L2", average_stage4_magnitude_loss, step
             )
 
+            logger.add_scalar(
+                "Stage 5 Direction L2", average_stage5_direction_loss, step
+            )
+
+            logger.add_scalar(
+                "Stage 5 Magnitude L2", average_stage5_magnitude_loss, step
+            )
+
             logger.add_scalar("Gradient Norm", gradient_norm, step)
 
             print(
@@ -422,18 +450,16 @@ def main():
                 f"Stage 3 Magnitude L2: {average_stage3_magnitude_loss:.5f},",
                 f"Stage 4 Direction L2: {average_stage4_direction_loss:.5f},",
                 f"Stage 4 Magnitude L2: {average_stage4_magnitude_loss:.5f},",
+                f"Stage 5 Direction L2: {average_stage5_direction_loss:.5f},",
+                f"Stage 5 Magnitude L2: {average_stage5_magnitude_loss:.5f},",
                 f"Gradient Norm: {gradient_norm:.5f}",
             )
 
-            total_stage1_direction_loss = 0.0
-            total_stage2_direction_loss = 0.0
-            total_stage3_direction_loss = 0.0
-            total_stage4_direction_loss = 0.0
-
-            total_stage1_magnitude_loss = 0.0
-            total_stage2_magnitude_loss = 0.0
-            total_stage3_magnitude_loss = 0.0
-            total_stage4_magnitude_loss = 0.0
+            total_stage1_direction_loss, total_stage1_magnitude_loss = 0.0, 0.0
+            total_stage2_direction_loss, total_stage2_magnitude_loss = 0.0, 0.0
+            total_stage3_direction_loss, total_stage3_magnitude_loss = 0.0, 0.0
+            total_stage4_direction_loss, total_stage4_magnitude_loss = 0.0, 0.0
+            total_stage5_direction_loss, total_stage5_magnitude_loss = 0.0, 0.0
 
             num_batches = 0
 
@@ -457,7 +483,12 @@ def main():
                     y3_teacher = out_teacher.hidden_states[anchor_points[2]]
                     y4_teacher = out_teacher.hidden_states[anchor_points[3]]
 
-                    embeddings = student.embed(x)
+                    # Trim off unused vocabulary tokens.
+                    y5_teacher = out_teacher.sequence_logits[
+                        ..., : tokenizer.vocab_size
+                    ]
+
+                    embeddings, logits = student.embed(x)
 
                     stage1_cosine_similarity_metric.update(
                         embeddings.stage1, y1_teacher, mask
@@ -480,6 +511,8 @@ def main():
                     stage3_linear_cka_metric.update(embeddings.stage3, y3_teacher, mask)
                     stage4_linear_cka_metric.update(embeddings.stage4, y4_teacher, mask)
 
+                    f1_metric.update(logits, y5_teacher, mask)
+
                 average_stage1_cosine_similarity = (
                     stage1_cosine_similarity_metric.compute()
                 )
@@ -501,6 +534,8 @@ def main():
                 average_stage3_linear_cka = stage3_linear_cka_metric.compute()
                 average_stage4_linear_cka = stage4_linear_cka_metric.compute()
 
+                f1, precision, recall = f1_metric.compute()
+
                 logger.add_scalar(
                     "Stage 1 Cosine Similarity", average_stage1_cosine_similarity, step
                 )
@@ -521,6 +556,9 @@ def main():
                 logger.add_scalar("Stage 2 CKA", average_stage2_linear_cka, step)
                 logger.add_scalar("Stage 3 CKA", average_stage3_linear_cka, step)
                 logger.add_scalar("Stage 4 CKA", average_stage4_linear_cka, step)
+                logger.add_scalar("F1 Score", f1, step)
+                logger.add_scalar("Precision", precision, step)
+                logger.add_scalar("Recall", recall, step)
 
                 print(
                     f"Stage 1 Cosine Similarity: {average_stage1_cosine_similarity:.4f},",
@@ -536,6 +574,10 @@ def main():
                     f"Stage 4 CKA: {average_stage4_linear_cka:.4f}",
                 )
 
+                print(
+                    f"F1 Score: {f1:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}"
+                )
+
                 stage1_cosine_similarity_metric.reset()
                 stage2_cosine_similarity_metric.reset()
                 stage3_cosine_similarity_metric.reset()
@@ -545,6 +587,8 @@ def main():
                 stage2_linear_cka_metric.reset()
                 stage3_linear_cka_metric.reset()
                 stage4_linear_cka_metric.reset()
+
+                f1_metric.reset()
 
                 student.train()
 

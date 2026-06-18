@@ -22,7 +22,7 @@ class DecomposedTokenRepresentationLoss(Module):
     ) -> tuple[Tensor, Tensor]:
         assert (
             y_student.size() == y_teacher.size()
-        ), "y_student and y_teacher must have the same dimensionality."
+        ), f"y_student and y_teacher must have the same dimensionality. Got {y_student.size()} and {y_teacher.size()}."
 
         embedding_dimensions = y_student.size(2)
 

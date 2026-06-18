@@ -1,3 +1,5 @@
+import torch
+
 from torch import Tensor
 
 from torch.nn.functional import cosine_similarity as torch_cosine_similarity
@@ -12,22 +14,22 @@ class CosineSimilarity:
         self.reset()
 
     def reset(self):
-        self.total_similarity = 0.0
-        self.num_samples = 0
+        self.total_similarity = torch.tensor(0.0)
+        self.num_samples = torch.tensor(0)
 
     def update(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor):
         assert (
             y_student.size() == y_teacher.size()
-        ), "y_student and y_teacher must have the same dimensions."
+        ), f"Student ({y_student.size()}) and Teacher ({y_teacher.size()}) must have the same dimensions."
 
         similarity = torch_cosine_similarity(y_student, y_teacher, dim=-1)
 
         similarity = similarity * mask
 
-        self.total_similarity += similarity.sum().item()
-        self.num_samples += mask.sum().item()
+        self.total_similarity += similarity.sum()
+        self.num_samples += mask.sum()
 
-    def compute(self) -> float:
+    def compute(self) -> Tensor:
         assert self.num_samples > 0, "No updates have been made yet."
 
         score = self.total_similarity / self.num_samples
@@ -54,7 +56,7 @@ class LinearCKA:
     def update(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor):
         assert (
             y_student.size() == y_teacher.size()
-        ), "y_student and y_teacher must have the same dimensions."
+        ), f"Student ({y_student.size()}) and Teacher ({y_teacher.size()}) must have the same dimensions."
 
         y_student = y_student.flatten(0, -2).float()
         y_teacher = y_teacher.flatten(0, -2).float()
@@ -122,3 +124,73 @@ class LinearCKA:
         score = centered_cross_ss / denominator
 
         return score
+
+
+class Top1MacroF1:
+    """
+    Compute the macro-averaged F1 score between student and teacher token predictions.
+    """
+
+    def __init__(self):
+        self.confusion_matrix = None
+
+    def reset(self):
+        self.confusion_matrix = None
+
+    def update(self, y_student: Tensor, y_teacher: Tensor, mask: Tensor):
+        assert (
+            y_student.size() == y_teacher.size()
+        ), f"Student ({y_student.size()}) and Teacher ({y_teacher.size()}) must have the same dimensions."
+
+        n_classes = y_student.size(-1)
+
+        teacher_labels = y_teacher.argmax(dim=-1)
+        student_labels = y_student.argmax(dim=-1)
+
+        teacher_labels = teacher_labels[mask]
+        student_labels = student_labels[mask]
+
+        indices = student_labels * n_classes + teacher_labels
+
+        if self.confusion_matrix is None:
+            self.confusion_matrix = torch.zeros(
+                n_classes,
+                n_classes,
+                dtype=torch.int64,
+                device=indices.device,
+            )
+
+        self.confusion_matrix += torch.bincount(indices, minlength=n_classes**2).view(
+            n_classes, n_classes
+        )
+
+    def compute(self) -> tuple[Tensor, Tensor, Tensor]:
+        assert self.confusion_matrix is not None, "No updates have been made yet."
+
+        tp = self.confusion_matrix.diag().float()
+
+        sigma_p = self.confusion_matrix.sum(dim=1)
+        sigma_r = self.confusion_matrix.sum(dim=0)
+
+        fp = sigma_p - tp
+        fn = sigma_r - tp
+
+        tp_fp = tp + fp
+        tp_fn = tp + fn
+
+        precision = torch.where(tp_fp > 0, tp / tp_fp, torch.zeros_like(tp))
+        recall = torch.where(tp_fn > 0, tp / tp_fn, torch.zeros_like(tp))
+
+        f1 = torch.where(
+            precision + recall > 0,
+            2 * precision * recall / (precision + recall),
+            torch.zeros_like(precision),
+        )
+
+        present = (sigma_r > 0) | (sigma_p > 0)
+
+        precision = precision[present].mean()
+        recall = recall[present].mean()
+        f1 = f1[present].mean()
+
+        return f1, precision, recall

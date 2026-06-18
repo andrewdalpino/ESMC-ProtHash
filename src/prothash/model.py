@@ -78,22 +78,18 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         )
 
         if embedding_dimensions != teacher_dimensions:
-            new_adapter_head = partial(
-                AdapterHead,
-                in_dimensions=embedding_dimensions,
-                out_dimensions=teacher_dimensions,
-            )
-
-            self.adapter1 = new_adapter_head()
-            self.adapter2 = new_adapter_head()
-            self.adapter3 = new_adapter_head()
-            self.adapter4 = new_adapter_head()
+            self.adapter1 = AdapterHead(embedding_dimensions, teacher_dimensions)
+            self.adapter2 = AdapterHead(embedding_dimensions, teacher_dimensions)
+            self.adapter3 = AdapterHead(embedding_dimensions, teacher_dimensions)
+            self.adapter4 = AdapterHead(embedding_dimensions, teacher_dimensions)
 
         else:
             self.adapter1 = Identity()
             self.adapter2 = Identity()
             self.adapter3 = Identity()
             self.adapter4 = Identity()
+
+        self.sequence_head = SequenceHead(embedding_dimensions, vocabulary_size)
 
         self.vocabulary_size = vocabulary_size
         self.padding_index = padding_index
@@ -145,20 +141,22 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
 
         z1, z2, z3, z4 = self.encoder.forward(z)
 
-        return z1, z2, z3, z4
+        logits = self.sequence_head.forward(z4)
+
+        return z1, z2, z3, z4, logits
 
     def forward_with_adapters(self, x: Tensor) -> tuple[Tensor, ...]:
-        z1, z2, z3, z4 = self.forward(x)
+        z1, z2, z3, z4, logits = self.forward(x)
 
         z1 = self.adapter1(z1)
         z2 = self.adapter2(z2)
         z3 = self.adapter3(z3)
         z4 = self.adapter4(z4)
 
-        return z1, z2, z3, z4
+        return z1, z2, z3, z4, logits
 
     @torch.inference_mode()
-    def embed_native(self, x: Tensor) -> Embeddings:
+    def embed_native(self, x: Tensor) -> tuple[Embeddings, Tensor]:
         """
         Output the contextual embeddings of the input sequence in native embedding dimensionality.
 
@@ -169,14 +167,14 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             Embeddings: The contextual embeddings of shape (batch_size, embedding_dimensions).
         """
 
-        z1, z2, z3, z4 = self.forward(x)
+        z1, z2, z3, z4, logits = self.forward(x)
 
         embeddings = Embeddings(z1, z2, z3, z4)
 
-        return embeddings
+        return embeddings, logits
 
     @torch.inference_mode()
-    def embed(self, x: Tensor) -> Embeddings:
+    def embed(self, x: Tensor) -> tuple[Embeddings, Tensor]:
         """
         Output the contextual embeddings of the input sequence in the teacher's dimensionality.
 
@@ -187,11 +185,11 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             Embeddings: The contextual embeddings of shape (batch_size, teacher_dimensions).
         """
 
-        z1, z2, z3, z4 = self.forward_with_adapters(x)
+        z1, z2, z3, z4, logits = self.forward_with_adapters(x)
 
         embeddings = Embeddings(z1, z2, z3, z4)
 
-        return embeddings
+        return embeddings, logits
 
 
 class ONNXModel(Module):
@@ -206,13 +204,14 @@ class ONNXModel(Module):
         self.model = model
 
     def forward(self, x: Tensor) -> dict[str, Tensor]:
-        embeddings = self.model.embed(x)
+        embeddings, logits = self.model.embed(x)
 
         return {
             "stage1": embeddings.stage1,
             "stage2": embeddings.stage2,
             "stage3": embeddings.stage3,
             "stage4": embeddings.stage4,
+            "logits": logits,
         }
 
 
@@ -538,5 +537,30 @@ class AdapterHead(Module):
     def forward(self, x: Tensor) -> Tensor:
         z = self.norm.forward(x)
         z = self.linear.forward(z)
+
+        return z
+
+
+class SequenceHead(Module):
+    """
+    A head for projecting the final stage's output to the vocabulary size for masked
+    language training objective.
+    """
+
+    def __init__(self, embedding_dimensions: int, vocabulary_size: int):
+        super().__init__()
+
+        self.linear1 = Linear(embedding_dimensions, embedding_dimensions, bias=False)
+        self.linear2 = Linear(embedding_dimensions, vocabulary_size, bias=False)
+
+        self.silu = SiLU()
+
+        self.norm = RMSNorm(embedding_dimensions)
+
+    def forward(self, x: Tensor) -> Tensor:
+        z = self.linear1.forward(x)
+        z = self.silu.forward(z)
+        z = self.norm.forward(z)
+        z = self.linear2.forward(z)
 
         return z

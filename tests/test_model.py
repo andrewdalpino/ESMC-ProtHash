@@ -69,7 +69,7 @@ class TestESMCProtHash(unittest.TestCase):
         self.assertIsInstance(model.adapter4, AdapterHead)
 
     def test_forward_pass(self):
-        z1, z2, z3, z4 = self.model.forward(self.x)
+        z1, z2, z3, z4, z5 = self.model.forward(self.x)
         emb = SMALL_CONFIG["embedding_dimensions"]
         self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
         self.assertEqual(z2.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
@@ -84,7 +84,7 @@ class TestESMCProtHash(unittest.TestCase):
             self.model.forward(long_x)
 
     def test_forward_with_adapters(self):
-        z1, z2, z3, z4 = self.model.forward_with_adapters(self.x)
+        z1, z2, z3, z4, z5 = self.model.forward_with_adapters(self.x)
         teacher = SMALL_CONFIG["teacher_dimensions"]
         self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
         self.assertEqual(z2.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
@@ -93,7 +93,7 @@ class TestESMCProtHash(unittest.TestCase):
 
     def test_embed_native(self):
         with torch.inference_mode():
-            embeddings = self.model.embed_native(self.x)
+            embeddings, _ = self.model.embed_native(self.x)
         emb = SMALL_CONFIG["embedding_dimensions"]
         self.assertEqual(embeddings.stage1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
         self.assertEqual(embeddings.stage2.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
@@ -102,7 +102,7 @@ class TestESMCProtHash(unittest.TestCase):
 
     def test_embed(self):
         with torch.inference_mode():
-            embeddings = self.model.embed(self.x)
+            embeddings, _ = self.model.embed(self.x)
         teacher = SMALL_CONFIG["teacher_dimensions"]
         self.assertEqual(embeddings.stage1.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
         self.assertEqual(embeddings.stage2.shape, (BATCH_SIZE, SEQ_LENGTH, teacher))
@@ -126,17 +126,17 @@ class TestESMCProtHash(unittest.TestCase):
     def test_fake_quantize_roundtrip(self):
         model = ESMCProtHash(**SMALL_CONFIG)
         model.add_fake_quantized_tensors(group_size=8)
-        z1, z2, z3, z4 = model.forward(self.x)
+        z1, z2, z3, z4, z5 = model.forward(self.x)
         emb = SMALL_CONFIG["embedding_dimensions"]
         self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
         model.remove_fake_quantized_tensors()
-        z1, z2, z3, z4 = model.forward(self.x)
+        z1, z2, z3, z4, z5 = model.forward(self.x)
         self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
 
     def test_quantize_weights(self):
         model = ESMCProtHash(**SMALL_CONFIG)
         model.quantize_weights(group_size=8)
-        z1, z2, z3, z4 = model.forward(self.x)
+        z1, z2, z3, z4, z5 = model.forward(self.x)
         emb = SMALL_CONFIG["embedding_dimensions"]
         self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
 
