@@ -24,6 +24,10 @@ class DecomposedTokenRepresentationLoss(Module):
             y_student.size() == y_teacher.size()
         ), f"y_student and y_teacher must have the same dimensionality. Got {y_student.size()} and {y_teacher.size()}."
 
+        assert mask.any(
+            dim=1
+        ).all(), "Each sequence must contain at least one unmasked token."
+
         embedding_dimensions = y_student.size(2)
 
         y_student = y_student.view(-1, embedding_dimensions)[mask.view(-1)]
