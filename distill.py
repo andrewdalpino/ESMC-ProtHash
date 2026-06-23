@@ -210,6 +210,8 @@ def main():
 
     student = ESMCProtHash(**model_args)
 
+    student.add_sequence_head()
+
     if args.quantization_aware_training:
         student.add_fake_quantized_tensors(args.quant_group_size)
 

@@ -2,17 +2,17 @@
 
 ![ESMC ProtHash Banner](https://raw.githubusercontent.com/andrewdalpino/ProtHash/master/docs/images/prothash_banner.png)
 
-A protein language model that outputs amino acid sequence embeddings for use in clustering, classification, locality-sensitive hashing, and more. Distilled from the [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) family of models, ProtHash produces contextual embeddings that align in vector space according to the sequences' underlying biological properties such as structure and function. Trained on the [SwissProt](https://huggingface.co/datasets/andrewdalpino/SwissProt-Gene-Ontology) dataset to mimic the activations of its ESMC teacher model, ProtHash embeddings have near-perfect similarity to ESMC embeddings but at a greatly reduced computational cost.
+A protein language model that outputs contextual embeddings that align in vector-space according to the protein's underlying biological properties such as structure and function. Distilled from the [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) family of models and trained on the [UniRef50](https://www.uniprot.org/help/uniref) dataset of over 53 million unique protein sequences, ProtHash embeddings align with the embedding space of ESMC but at a greatly reduced computational cost.
 
 ## Key Features
 
-- **Blazing fast and efficient**: ProtHash uses less than 1.5% of its ESMC teacher's total parameters to achieve near-perfect cosine similarity between the two embedding spaces.
+- **Blazing fast and efficient**: ProtHash uses significantly less computational resources than ESMC while matching up to 98% of the embedding space.
 
 - **Biologically-relevant**: Biologically similar proteins will show up nearby in the embedding space enabling downstream tasks such as clustering, classification, and locality-sensitive hashing.
 
-- **Compatible with ESMC**: ProtHash can output embeddings in its native or ESMC teacher's dimensionality - allowing it to serve as either a faster drop-in approximation to ESMC embeddings or a more efficient compressed representation.
+- **Compatible with ESMC**: ProtHash can output embeddings in either its native or ESMC teacher's dimensionality - allowing it to serve as both a faster drop-in replacement for ESMC embeddings or a more compressed representation.
 
-- **Quantization-ready**: With quantization-aware post-training, ProtHash allows you to quantize the weights of the model while maintaining its near-perfect similarity to the teacher's embedding space.
+- **Quantization-ready**: With quantization-aware post-training, ProtHash allows you to quantize the weights of the model while maintaining its high cosine similarity to the teacher's embedding space.
 
 ## Prtrained Models
 
@@ -26,6 +26,8 @@ Coming soon ...
 | [andrewdalpino/ProtHash-V0-384](https://huggingface.co/andrewdalpino/ProtHash-V0-384) | 2048 | 384 | 16/4 | 10 | 10M | esmc_300m | 960 | 0.2.x |
 | [andrewdalpino/ProtHash-V0-512-Tiny](https://huggingface.co/andrewdalpino/ProtHash-V0-512-Tiny) | 2048 | 512 | 16/4 | 4 | 7.4M | esmc_600m | 1152 | 0.2.x |
 | [andrewdalpino/ProtHash-V0-512](https://huggingface.co/andrewdalpino/ProtHash-V0-512) | 2048 | 512 | 16/4 | 10 | 18M | esmc_600m | 1152 | 0.2.x |
+
+**Note:** The V0 models were only trained to match the output of the classification token and not the per-token embeddings.
 
 ## Example
 

@@ -89,7 +89,7 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             self.adapter3 = Identity()
             self.adapter4 = Identity()
 
-        self.sequence_head = SequenceHead(embedding_dimensions, vocabulary_size)
+        self.sequence_head = None
 
         self.vocabulary_size = vocabulary_size
         self.padding_index = padding_index
@@ -109,6 +109,18 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         """Freeze all model parameters."""
 
         self.requires_grad_(False)
+
+    def add_sequence_head(self) -> None:
+        """Add a sequence head for masked language modeling."""
+
+        self.sequence_head = SequenceHead(
+            self.embedding_dimensions, self.vocabulary_size
+        )
+
+    def remove_sequence_head(self) -> None:
+        """Remove the sequence head."""
+
+        self.sequence_head = None
 
     def add_fake_quantized_tensors(self, group_size: int) -> None:
         """Prepare the model for quantization-aware training."""
@@ -130,6 +142,10 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         Args:
             x (Tensor): The token index sequence of shape (batch_size, sequence_length).
         """
+
+        assert (
+            self.sequence_head is not None
+        ), "Sequence head must be added before calling forward."
 
         t = x.size(1)
 
