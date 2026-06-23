@@ -14,11 +14,15 @@ A protein language model that outputs contextual embeddings that align in vector
 
 - **Quantization-ready**: With quantization-aware post-training, ProtHash allows you to quantize the weights of the model while maintaining its high cosine similarity to the teacher's embedding space.
 
-## Prtrained Models
+## Pretrained Models
+
+These model weights can be loaded using the `prothash` library using the `from_pretrained()` method. ONNX versions are also available.
+
+### Version 1
 
 Coming soon ...
 
-## Legacy Pretrained Models
+### Legacy Models
 
 | Name | Context Length | Embedding Dimensions | Attention Heads (Q/KV) | Encoder Layers | Total Params | Teacher Model | Teacher Dimensions | Library Version |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -48,7 +52,7 @@ from prothash.model import ProtHash
 
 tokenizer = EsmSequenceTokenizer()
 
-model_name = "andrewdalpino/ProtHash-V2-512-Tiny"
+model_name = "andrewdalpino/ProtHash-V0-512"
 
 model = ProtHash.from_pretrained(model_name)
 
