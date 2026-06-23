@@ -156,7 +156,7 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         return z1, z2, z3, z4, logits
 
     @torch.inference_mode()
-    def embed_native(self, x: Tensor) -> tuple[Embeddings, Tensor]:
+    def embed_native(self, x: Tensor) -> Embeddings:
         """
         Output the contextual embeddings of the input sequence in native embedding dimensionality.
 
@@ -167,14 +167,22 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             Embeddings: The contextual embeddings of shape (batch_size, embedding_dimensions).
         """
 
-        z1, z2, z3, z4, logits = self.forward(x)
+        t = x.size(1)
+
+        assert (
+            t <= self.context_length
+        ), f"Input sequence length {t} exceeds the maximum context length {self.context_length}."
+
+        z = self.token_embeddings.forward(x)
+
+        z1, z2, z3, z4 = self.encoder.forward(z)
 
         embeddings = Embeddings(z1, z2, z3, z4)
 
-        return embeddings, logits
+        return embeddings
 
     @torch.inference_mode()
-    def embed(self, x: Tensor) -> tuple[Embeddings, Tensor]:
+    def embed(self, x: Tensor) -> Embeddings:
         """
         Output the contextual embeddings of the input sequence in the teacher's dimensionality.
 
@@ -185,11 +193,24 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             Embeddings: The contextual embeddings of shape (batch_size, teacher_dimensions).
         """
 
-        z1, z2, z3, z4, logits = self.forward_with_adapters(x)
+        t = x.size(1)
+
+        assert (
+            t <= self.context_length
+        ), f"Input sequence length {t} exceeds the maximum context length {self.context_length}."
+
+        z = self.token_embeddings.forward(x)
+
+        z1, z2, z3, z4 = self.encoder.forward(z)
+
+        z1 = self.adapter1(z1)
+        z2 = self.adapter2(z2)
+        z3 = self.adapter3(z3)
+        z4 = self.adapter4(z4)
 
         embeddings = Embeddings(z1, z2, z3, z4)
 
-        return embeddings, logits
+        return embeddings
 
 
 class ONNXModel(Module):

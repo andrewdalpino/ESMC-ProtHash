@@ -30,8 +30,8 @@ from tqdm import tqdm
 AVAILABLE_TEACHERS = {"esmc_300m", "esmc_600m"}
 
 TEACHER_LAYER_ANCHOR_POINTS = {
-    "esmc_300m": (7, 16, 23, 29),
-    "esmc_600m": (8, 18, 26, 35),
+    "esmc_300m": (7, 15, 22, 29),
+    "esmc_600m": (8, 18, 27, 35),
 }
 
 
@@ -51,7 +51,7 @@ def main():
     parser.add_argument("--max_sequence_length", default=2048, type=int)
     parser.add_argument("--quantization_aware_training", action="store_true")
     parser.add_argument("--quant_group_size", default=64, type=int)
-    parser.add_argument("--learning_rate", default=3e-4, type=float)
+    parser.add_argument("--learning_rate", default=1e-3, type=float)
     parser.add_argument("--anneal_learning_rate", action="store_true")
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
@@ -61,10 +61,10 @@ def main():
     parser.add_argument("--stage1_magnitude_weight", default=0.0025, type=float)
     parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
     parser.add_argument("--stage2_magnitude_weight", default=0.005, type=float)
-    parser.add_argument("--stage3_direction_weight", default=1.0, type=float)
-    parser.add_argument("--stage3_magnitude_weight", default=0.01, type=float)
-    parser.add_argument("--stage4_direction_weight", default=2.0, type=float)
-    parser.add_argument("--stage4_magnitude_weight", default=0.02, type=float)
+    parser.add_argument("--stage3_direction_weight", default=0.75, type=float)
+    parser.add_argument("--stage3_magnitude_weight", default=0.0075, type=float)
+    parser.add_argument("--stage4_direction_weight", default=1.0, type=float)
+    parser.add_argument("--stage4_magnitude_weight", default=0.01, type=float)
     parser.add_argument("--stage5_direction_weight", default=0.1, type=float)
     parser.add_argument("--stage5_magnitude_weight", default=0.001, type=float)
     parser.add_argument("--loss_norm_epsilon", default=1e-8, type=float)
@@ -488,28 +488,21 @@ def main():
                         ..., : tokenizer.vocab_size
                     ]
 
-                    embeddings, logits = student.embed(x)
+                    with torch.no_grad():
+                        z1, z2, z3, z4, logits = student.forward_with_adapters(x)
 
-                    stage1_cosine_similarity_metric.update(
-                        embeddings.stage1, y1_teacher, mask
-                    )
+                    stage1_cosine_similarity_metric.update(z1, y1_teacher, mask)
 
-                    stage2_cosine_similarity_metric.update(
-                        embeddings.stage2, y2_teacher, mask
-                    )
+                    stage2_cosine_similarity_metric.update(z2, y2_teacher, mask)
 
-                    stage3_cosine_similarity_metric.update(
-                        embeddings.stage3, y3_teacher, mask
-                    )
+                    stage3_cosine_similarity_metric.update(z3, y3_teacher, mask)
 
-                    stage4_cosine_similarity_metric.update(
-                        embeddings.stage4, y4_teacher, mask
-                    )
+                    stage4_cosine_similarity_metric.update(z4, y4_teacher, mask)
 
-                    stage1_linear_cka_metric.update(embeddings.stage1, y1_teacher, mask)
-                    stage2_linear_cka_metric.update(embeddings.stage2, y2_teacher, mask)
-                    stage3_linear_cka_metric.update(embeddings.stage3, y3_teacher, mask)
-                    stage4_linear_cka_metric.update(embeddings.stage4, y4_teacher, mask)
+                    stage1_linear_cka_metric.update(z1, y1_teacher, mask)
+                    stage2_linear_cka_metric.update(z2, y2_teacher, mask)
+                    stage3_linear_cka_metric.update(z3, y3_teacher, mask)
+                    stage4_linear_cka_metric.update(z4, y4_teacher, mask)
 
                     f1_metric.update(logits, y5_teacher, mask)
 
