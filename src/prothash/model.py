@@ -241,14 +241,13 @@ class ONNXModel(Module):
         self.model = model
 
     def forward(self, x: Tensor) -> dict[str, Tensor]:
-        embeddings, logits = self.model.embed(x)
+        embeddings = self.model.embed(x)
 
         return {
             "stage1": embeddings.stage1,
             "stage2": embeddings.stage2,
             "stage3": embeddings.stage3,
             "stage4": embeddings.stage4,
-            "logits": logits,
         }
 
 
