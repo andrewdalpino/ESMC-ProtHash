@@ -31,7 +31,7 @@ Coming soon ...
 | [andrewdalpino/ProtHash-V0-512-Tiny](https://huggingface.co/andrewdalpino/ProtHash-V0-512-Tiny) | 2048 | 512 | 16/4 | 4 | 7.4M | esmc_600m | 1152 | 0.2.x |
 | [andrewdalpino/ProtHash-V0-512](https://huggingface.co/andrewdalpino/ProtHash-V0-512) | 2048 | 512 | 16/4 | 10 | 18M | esmc_600m | 1152 | 0.2.x |
 
-**Note:** The V0 models were only trained to match the output of the classification token and not the per-token embeddings.
+**Note:** The V0 models were trained on the SwissProt dataset and only trained to match the output of the classification token and not the per-token embeddings.
 
 ## Example
 
