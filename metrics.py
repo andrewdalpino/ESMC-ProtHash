@@ -22,12 +22,15 @@ class CosineSimilarity:
             y_student.size() == y_teacher.size()
         ), f"Student ({y_student.size()}) and Teacher ({y_teacher.size()}) must have the same dimensions."
 
+        mask = mask.bool()
+
+        y_student = y_student[mask]
+        y_teacher = y_teacher[mask]
+
         similarity = torch_cosine_similarity(y_student, y_teacher, dim=-1)
 
-        similarity = similarity * mask
-
         self.total_similarity += similarity.sum()
-        self.num_samples += mask.sum()
+        self.num_samples += similarity.numel()
 
     def compute(self) -> Tensor:
         assert self.num_samples > 0, "No updates have been made yet."
@@ -148,6 +151,8 @@ class Top1MacroF1:
         teacher_labels = y_teacher.argmax(dim=-1)
         student_labels = y_student.argmax(dim=-1)
 
+        mask = mask.bool()
+
         teacher_labels = teacher_labels[mask]
         student_labels = student_labels[mask]
 
@@ -173,6 +178,9 @@ class Top1MacroF1:
         sigma_p = self.confusion_matrix.sum(dim=1)
         sigma_r = self.confusion_matrix.sum(dim=0)
 
+        # Select indices of classes that have no predictions or true labels.
+        present = (sigma_r > 0) | (sigma_p > 0)
+
         fp = sigma_p - tp
         fn = sigma_r - tp
 
@@ -189,10 +197,12 @@ class Top1MacroF1:
         )
 
         # Exclude classes that have no predictions or true labels.
-        present = (sigma_r > 0) | (sigma_p > 0)
+        precision = precision[present]
+        recall = recall[present]
+        f1 = f1[present]
 
-        precision = precision[present].mean()
-        recall = recall[present].mean()
-        f1 = f1[present].mean()
+        precision = precision.mean() if precision.numel() > 0 else torch.tensor(0.0)
+        recall = recall.mean() if recall.numel() > 0 else torch.tensor(0.0)
+        f1 = f1.mean() if f1.numel() > 0 else torch.tensor(0.0)
 
         return f1, precision, recall

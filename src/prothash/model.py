@@ -215,14 +215,12 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
             t <= self.context_length
         ), f"Input sequence length {t} exceeds the maximum context length {self.context_length}."
 
-        z = self.token_embeddings.forward(x)
+        embeddings = self.embed_native(x)
 
-        z1, z2, z3, z4 = self.encoder.forward(z)
-
-        z1 = self.adapter1(z1)
-        z2 = self.adapter2(z2)
-        z3 = self.adapter3(z3)
-        z4 = self.adapter4(z4)
+        z1 = self.adapter1(embeddings.stage1)
+        z2 = self.adapter2(embeddings.stage2)
+        z3 = self.adapter3(embeddings.stage3)
+        z4 = self.adapter4(embeddings.stage4)
 
         embeddings = Embeddings(z1, z2, z3, z4)
 

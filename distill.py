@@ -46,7 +46,7 @@ def main():
 
     parser.add_argument("--dataset_path", default="dataset/uniref50.fasta", type=str)
     parser.add_argument("--num_length_buckets", default=100, type=int)
-    parser.add_argument("--num_dataset_processes", default=1, type=int)
+    parser.add_argument("--num_dataset_processes", default=2, type=int)
     parser.add_argument("--min_sequence_length", default=1, type=int)
     parser.add_argument("--max_sequence_length", default=2048, type=int)
     parser.add_argument("--quantization_aware_training", action="store_true")
@@ -56,7 +56,7 @@ def main():
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
     parser.add_argument("--batch_size", default=16, type=int)
     parser.add_argument("--gradient_accumulation_steps", default=16, type=int)
-    parser.add_argument("--max_steps", default=100000, type=int)
+    parser.add_argument("--max_steps", default=150000, type=int)
     parser.add_argument("--stage1_direction_weight", default=0.25, type=float)
     parser.add_argument("--stage1_magnitude_weight", default=0.0025, type=float)
     parser.add_argument("--stage2_direction_weight", default=0.5, type=float)
