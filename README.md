@@ -10,7 +10,7 @@ A protein language model that outputs contextual embeddings that align in vector
 
 - **Biologically-relevant**: Biologically similar proteins will show up nearby in the embedding space enabling downstream tasks such as clustering, classification, and locality-sensitive hashing.
 
-- **Compatible with ESMC**: ProtHash can output embeddings in either its native or ESMC teacher's dimensionality - allowing it to serve as both a faster drop-in replacement for ESMC embeddings or a more compressed representation.
+- **Compatible with ESMC**: ProtHash can output either ESMC or native embeddings - allowing it to serve as both a faster drop-in replacement for ESMC embeddings or a more compressed representation.
 
 - **Quantization-ready**: With quantization-aware post-training, ProtHash allows you to quantize the weights of the model while maintaining its high cosine similarity to the teacher's embedding space.
 
