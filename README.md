@@ -39,29 +39,26 @@ These model weights can be loaded using the `prothash` library using the `from_p
 
 ## Example
 
-First, you'll need the `prothash` and `esm` packages installed into your environment. For ProtHash version 1 use library version `0.1.x` and for version 2 install library version `0.2.x`. We recommend using a virtual environment such as Python's `venv` module to prevent version conflicts with other packages.
+First, you'll need the `prothash` and `esm` packages installed into your environment. For ProtHash version 1 use library version `1.x` and for version 0 install library version `0.2.x`. We recommend using a virtual environment such as Python's `venv` module to prevent version conflicts with other packages.
 
 ```sh
-pip install prothash~=0.2.0 esm
+pip install prothash~=1.0.0 esm
 ```
 
-Then, load the weights from HuggingFace Hub, tokenize a protein sequence, and pass it to the model. ProtHash adopts the ESM tokenizer as it's amino acids tokenization scheme which consists of a vocabulary of 33 amino acid and special tokens. The output will be an embedding vector that can be used in downstream tasks such as comparing to other protein sequence embeddings, clustering, and near-duplicate detection.
+Then, load the weights from HuggingFace Hub, tokenize a protein sequence, and pass it to the model. The out is an Embeddings object that contains the contextual embeddings from four different stages of the encoder. Stage 1 contains the earliest encoder embeddings and stage 4 contains the latest embeddings.
 
 ```python
 import torch
 
 from esm.tokenization import EsmSequenceTokenizer
 
-from prothash.model import ProtHash
+from prothash.model import ESMCProtHash
 
 tokenizer = EsmSequenceTokenizer()
 
-model_name = "andrewdalpino/ProtHash-V0-512"
+model_name = "andrewdalpino/ESMC-ProtHash-V1-960"
 
 model = ProtHash.from_pretrained(model_name)
-
-# Optionally quantize the weights to Int8.
-model.quantize_weights()
 
 sequence = input("Enter a sequence: ")
 
@@ -72,14 +69,17 @@ tokens = out["input_ids"]
 # Input is a [1, T] tensor of token indices. 
 x = torch.tensor(tokens, dtype=torch.int64).unsqueeze(0)
 
-# Output the sequence embedding in native dimensionality.
-y_embed_native = model.embed_native(x).squeeze(0)
+# Output ESMC embeddings.
+embeddings = model.embed(x)
 
-# Output a drop-in replacement for the teacher's embeddings.
-y_embed_teacher = model.embed_teacher(x).squeeze(0)
+# Output the sequence embeddings in native dimensionality.
+embeddings = model.embed_native(x)
 
-print(y_embed_native.shape)
-print(y_embed_teacher.shape)
+# You can access all 4 stages from the embeddings object.
+print(embeddings.stage1)
+print(embeddings.stage2)
+print(embeddings.stage3)
+print(embeddings.stage4)
 ```
 
 ## References
