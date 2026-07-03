@@ -12,8 +12,6 @@ A protein language model that outputs contextual embeddings that align in vector
 
 - **Compatible with ESMC**: ProtHash can output either ESMC or native embeddings - allowing it to serve as both a faster drop-in replacement for ESMC embeddings or a more compressed representation.
 
-- **Quantization-ready**: With quantization-aware post-training, ProtHash allows you to quantize the weights of the model while maintaining its high cosine similarity to the teacher's embedding space.
-
 ## Pretrained Models
 
 These model weights can be loaded using the `prothash` library using the `from_pretrained()` method. ONNX versions are also available.
