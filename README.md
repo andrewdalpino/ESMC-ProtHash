@@ -35,6 +35,10 @@ These model weights can be loaded using the `prothash` library using the `from_p
 
 **Note:** The V0 models were trained on the SwissProt dataset and only trained to match the embedding space of the classification token.
 
+## Code Repository
+
+Source code for training and inference can be found at [https://github.com/andrewdalpino/ESMC-ProtHash](https://github.com/andrewdalpino/ESMC-ProtHash).
+
 ## Example
 
 First, you'll need the `prothash` and `esm` packages installed into your environment. For ProtHash version 1 use library version `1.x` and for version 0 install library version `0.2.x`. We recommend using a virtual environment such as Python's `venv` module to prevent version conflicts with other packages.
