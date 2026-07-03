@@ -20,8 +20,7 @@ These model weights can be loaded using the `prothash` library using the `from_p
 
 ### Version 1
 
-| Name | Context Length | Embedding Dimensions | Native Dimensionality | Attention Heads | Encoder Layers | Total Params 
- Library Version |
+| Name | Context Length | Embedding Dimensions | Native Dimensionality | Attention Heads | Encoder Layers | Total Params | Library Version |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | [andrewdalpino/ESMC-ProtHash-V1-960](https://huggingface.co/andrewdalpino/ESMC-ProtHash-V1-960) | 2048 | 960 | 512 | 8 | 12 | 43M | 1.x |
 
