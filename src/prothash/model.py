@@ -428,6 +428,8 @@ class RotaryPositionalEmbedding(Module):
             in the rotary positional embedding calculation.
         """
 
+        assert head_dimensions > 2, "Head dimensions must be greater than 2."
+
         exponent = head_dimensions / (head_dimensions - 2)
 
         base = ceil((context_length / (2 * pi)) ** exponent)
@@ -443,6 +445,8 @@ class RotaryPositionalEmbedding(Module):
 
     def __init__(self, context_length: int, head_dimensions: int):
         super().__init__()
+
+        assert head_dimensions % 2 == 0, "Head dimensions must be even."
 
         base = self.calculate_base(context_length, head_dimensions)
 
