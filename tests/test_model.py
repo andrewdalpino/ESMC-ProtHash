@@ -13,7 +13,6 @@ from prothash.model import (
     AdapterHead,
 )
 
-
 SMALL_CONFIG = dict(
     vocabulary_size=32,
     padding_index=0,

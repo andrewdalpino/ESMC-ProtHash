@@ -281,13 +281,13 @@ class Encoder(Module):
             num_stage4_layers >= 1
         ), "Number of stage 4 layers must be greater than 0."
 
-        new_encoder_block = partial(
-            EncoderBlock,
-            context_length=context_length,
-            embedding_dimensions=embedding_dimensions,
-            num_heads=num_attention_heads,
-            hidden_ratio=hidden_ratio,
-        )
+        def new_encoder_block():
+            return EncoderBlock(
+                context_length,
+                embedding_dimensions,
+                num_attention_heads,
+                hidden_ratio,
+            )
 
         self.stage1 = Sequential(
             *[new_encoder_block() for _ in range(num_stage1_layers)]
