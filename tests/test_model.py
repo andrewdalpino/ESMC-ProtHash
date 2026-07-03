@@ -122,23 +122,6 @@ class TestESMCProtHash(unittest.TestCase):
         self.model.freeze_weights()
         self.assertEqual(self.model.num_trainable_parameters, 0)
 
-    def test_fake_quantize_roundtrip(self):
-        model = ESMCProtHash(**SMALL_CONFIG)
-        model.add_fake_quantized_tensors(group_size=8)
-        z1, z2, z3, z4, z5 = model.forward(self.x)
-        emb = SMALL_CONFIG["embedding_dimensions"]
-        self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
-        model.remove_fake_quantized_tensors()
-        z1, z2, z3, z4, z5 = model.forward(self.x)
-        self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
-
-    def test_quantize_weights(self):
-        model = ESMCProtHash(**SMALL_CONFIG)
-        model.quantize_weights(group_size=8)
-        z1, z2, z3, z4, z5 = model.forward(self.x)
-        emb = SMALL_CONFIG["embedding_dimensions"]
-        self.assertEqual(z1.shape, (BATCH_SIZE, SEQ_LENGTH, emb))
-
 
 class TestONNXModel(unittest.TestCase):
     def setUp(self):

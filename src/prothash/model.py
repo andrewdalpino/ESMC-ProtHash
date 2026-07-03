@@ -19,14 +19,6 @@ from torch.nn import (
 from torch.nn.functional import scaled_dot_product_attention
 from torch.utils.checkpoint import checkpoint as torch_checkpoint
 
-from torchao.quantization import Int8WeightOnlyConfig, quantize_
-
-from torchao.quantization.qat import (
-    FakeQuantizeConfig,
-    IntXQuantizationAwareTrainingConfig,
-    FromIntXQuantizationAwareTrainingConfig,
-)
-
 from huggingface_hub import PyTorchModelHubMixin
 
 
@@ -121,21 +113,6 @@ class ESMCProtHash(Module, PyTorchModelHubMixin):
         """Remove the sequence head."""
 
         self.sequence_head = None
-
-    def add_fake_quantized_tensors(self, group_size: int) -> None:
-        """Prepare the model for quantization-aware training."""
-
-        self.encoder.add_fake_quantized_tensors(group_size)
-
-    def remove_fake_quantized_tensors(self) -> None:
-        """Convert fake quantized tensors back to regular tensors."""
-
-        self.encoder.remove_fake_quantized_tensors()
-
-    def quantize_weights(self, group_size: int) -> None:
-        """Quantize the weights of the model."""
-
-        self.encoder.quantize_weights(group_size)
 
     def forward(self, x: Tensor) -> tuple[Tensor, ...]:
         """
@@ -306,43 +283,6 @@ class Encoder(Module):
         )
 
         self.checkpoint = lambda layer, x: layer.forward(x)
-
-    def add_fake_quantized_tensors(self, group_size: int) -> None:
-        """Prepare the model for quantization-aware training."""
-
-        for module in self.modules():
-            if isinstance(module, Linear):
-                assert module.in_features % group_size == 0, (
-                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
-                    f" of layer {module}."
-                )
-
-        weight_config = FakeQuantizeConfig(torch.int8, group_size=group_size)
-
-        config = IntXQuantizationAwareTrainingConfig(weight_config=weight_config)
-
-        quantize_(self, config)
-
-    def remove_fake_quantized_tensors(self) -> None:
-        """Convert fake quantized tensors back to regular tensors."""
-
-        config = FromIntXQuantizationAwareTrainingConfig()
-
-        quantize_(self, config)
-
-    def quantize_weights(self, group_size: int) -> None:
-        """Quantize the weights of the model."""
-
-        for module in self.modules():
-            if isinstance(module, Linear):
-                assert module.in_features % group_size == 0, (
-                    f"quant_group_size ({group_size}) must divide in_features ({module.in_features})"
-                    f" of layer {module}."
-                )
-
-        config = Int8WeightOnlyConfig(group_size=group_size)
-
-        quantize_(self, config)
 
     def enable_activation_checkpointing(self) -> None:
         """Instead of memorizing the activations of the forward pass, recompute them at various checkpoints."""

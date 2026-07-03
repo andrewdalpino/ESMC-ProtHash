@@ -49,8 +49,6 @@ def main():
     parser.add_argument("--num_dataset_processes", default=2, type=int)
     parser.add_argument("--min_sequence_length", default=1, type=int)
     parser.add_argument("--max_sequence_length", default=2048, type=int)
-    parser.add_argument("--quantization_aware_training", action="store_true")
-    parser.add_argument("--quant_group_size", default=64, type=int)
     parser.add_argument("--learning_rate", default=1e-3, type=float)
     parser.add_argument("--anneal_learning_rate", action="store_true")
     parser.add_argument("--max_gradient_norm", default=1.0, type=float)
@@ -211,9 +209,6 @@ def main():
     student = ESMCProtHash(**model_args)
 
     student.add_sequence_head()
-
-    if args.quantization_aware_training:
-        student.add_fake_quantized_tensors(args.quant_group_size)
 
     student = student.to(args.device)
 
