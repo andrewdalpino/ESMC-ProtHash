@@ -2,7 +2,7 @@
 
 ![ESMC ProtHash Banner](https://raw.githubusercontent.com/andrewdalpino/ProtHash/master/docs/images/prothash_banner.png)
 
-A protein language model that outputs contextual embeddings that align in vector-space according to the protein's underlying biological properties such as structure and function. Distilled from the [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) family of models and trained on the [UniRef50](https://www.uniprot.org/help/uniref) dataset of over 53 million unique protein sequences, ProtHash embeddings align with the embedding space of ESMC but at a greatly reduced computational cost.
+A fast protein language model that outputs contextual embeddings that align in vector-space according to the protein's underlying biological properties such as structure and function. Distilled from the [ESMC](https://www.evolutionaryscale.ai/blog/esm-cambrian) family of models and trained on the [UniRef50](https://www.uniprot.org/help/uniref) dataset of over 53 million unique protein sequences, ProtHash embeddings align with the embedding space of ESMC but at a greatly reduced computational cost.
 
 ## Key Features
 
@@ -12,15 +12,17 @@ A protein language model that outputs contextual embeddings that align in vector
 
 - **Compatible with ESMC**: ProtHash can output either ESMC or native embeddings - allowing it to serve as both a faster drop-in replacement for ESMC embeddings or a more compressed representation.
 
-- **Quantization-ready**: With quantization-aware post-training, ProtHash allows you to quantize the weights of the model while maintaining its high cosine similarity to the teacher's embedding space.
-
 ## Pretrained Models
 
 These model weights can be loaded using the `prothash` library using the `from_pretrained()` method. ONNX versions are also available.
 
 ### Version 1
 
-Coming soon ...
+| Name | Context Length | Embedding Dimensions | Native Dimensionality | Attention Heads | Encoder Layers | Total Params | Library Version |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [andrewdalpino/ESMC-ProtHash-V1-960](https://huggingface.co/andrewdalpino/ESMC-ProtHash-V1-960) | 2048 | 960 | 512 | 8 | 12 | 43M | 1.x |
+
+**Note:** V1 models are trained on the UniRef50 dataset to match the complete contextual embedding space.
 
 ### Legacy Models
 
@@ -31,33 +33,34 @@ Coming soon ...
 | [andrewdalpino/ProtHash-V0-512-Tiny](https://huggingface.co/andrewdalpino/ProtHash-V0-512-Tiny) | 2048 | 512 | 16/4 | 4 | 7.4M | esmc_600m | 1152 | 0.2.x |
 | [andrewdalpino/ProtHash-V0-512](https://huggingface.co/andrewdalpino/ProtHash-V0-512) | 2048 | 512 | 16/4 | 10 | 18M | esmc_600m | 1152 | 0.2.x |
 
-**Note:** The V0 models were trained on the SwissProt dataset and only trained to match the output of the classification token and not the per-token embeddings.
+**Note:** The V0 models were trained on the SwissProt dataset and only trained to match the embedding space of the classification token.
+
+## Code Repository
+
+Source code for training and inference can be found at [https://github.com/andrewdalpino/ESMC-ProtHash](https://github.com/andrewdalpino/ESMC-ProtHash).
 
 ## Example
 
-First, you'll need the `prothash` and `esm` packages installed into your environment. For ProtHash version 1 use library version `0.1.x` and for version 2 install library version `0.2.x`. We recommend using a virtual environment such as Python's `venv` module to prevent version conflicts with other packages.
+First, you'll need the `prothash` and `esm` packages installed into your environment. For ProtHash version 1 use library version `1.x` and for version 0 install library version `0.2.x`. We recommend using a virtual environment such as Python's `venv` module to prevent version conflicts with other packages.
 
 ```sh
-pip install prothash~=0.2.0 esm
+pip install prothash~=1.0.0 esm
 ```
 
-Then, load the weights from HuggingFace Hub, tokenize a protein sequence, and pass it to the model. ProtHash adopts the ESM tokenizer as it's amino acids tokenization scheme which consists of a vocabulary of 33 amino acid and special tokens. The output will be an embedding vector that can be used in downstream tasks such as comparing to other protein sequence embeddings, clustering, and near-duplicate detection.
+Then, load the weights from HuggingFace Hub, tokenize a protein sequence, and pass it to the model. The out is an Embeddings object that contains the contextual embeddings from four different stages of the encoder. Stage 1 contains the earliest encoder embeddings and stage 4 contains the latest embeddings.
 
 ```python
 import torch
 
 from esm.tokenization import EsmSequenceTokenizer
 
-from prothash.model import ProtHash
+from prothash.model import ESMCProtHash
 
 tokenizer = EsmSequenceTokenizer()
 
-model_name = "andrewdalpino/ProtHash-V0-512"
+model_name = "andrewdalpino/ESMC-ProtHash-V1-960"
 
 model = ProtHash.from_pretrained(model_name)
-
-# Optionally quantize the weights to Int8.
-model.quantize_weights()
 
 sequence = input("Enter a sequence: ")
 
@@ -68,14 +71,17 @@ tokens = out["input_ids"]
 # Input is a [1, T] tensor of token indices. 
 x = torch.tensor(tokens, dtype=torch.int64).unsqueeze(0)
 
-# Output the sequence embedding in native dimensionality.
-y_embed_native = model.embed_native(x).squeeze(0)
+# Output ESMC embeddings.
+embeddings = model.embed(x)
 
-# Output a drop-in replacement for the teacher's embeddings.
-y_embed_teacher = model.embed_teacher(x).squeeze(0)
+# Output the sequence embeddings in native dimensionality.
+embeddings = model.embed_native(x)
 
-print(y_embed_native.shape)
-print(y_embed_teacher.shape)
+# You can access all 4 stages from the embeddings object.
+print(embeddings.stage1)
+print(embeddings.stage2)
+print(embeddings.stage3)
+print(embeddings.stage4)
 ```
 
 ## References
