@@ -20,6 +20,7 @@ These model weights can be loaded using the `prothash` library using the `from_p
 
 | Name | Context Length | Embedding Dimensions | Native Dimensionality | Attention Heads | Encoder Layers | Total Params | Library Version |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| [andrewdalpino/ESMC-ProtHash-V1-1152](https://huggingface.co/andrewdalpino/ESMC-ProtHash-V1-1552) | 2048 | 1152 | 768 | 12 | 16 | 117M | 1.x |
 | [andrewdalpino/ESMC-ProtHash-V1-960](https://huggingface.co/andrewdalpino/ESMC-ProtHash-V1-960) | 2048 | 960 | 512 | 8 | 12 | 43M | 1.x |
 
 **Note:** V1 models are trained on the UniRef50 dataset to match the complete contextual embedding space.
