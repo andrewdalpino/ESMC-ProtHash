@@ -6,7 +6,7 @@ A fast protein language model that outputs contextual embeddings that align in v
 
 ## Key Features
 
-- **Blazing fast and efficient**: ProtHash uses significantly less computational resources than ESMC while matching up to 98% of the embedding space.
+- **Blazing fast and efficient**: ProtHash matching up to 98% of the ESMC embedding space while using only 12% of the total parameters - making it suitable for very high-throughput screening of protein sequences.
 
 - **Biologically-relevant**: Biologically similar proteins will show up nearby in the embedding space enabling downstream tasks such as clustering, classification, and locality-sensitive hashing.
 
