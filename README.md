@@ -92,7 +92,7 @@ Here are the cosine similarity and centered kernel alignment (CKA) scores that c
 ### ProtHash V1 1152
 
 | Stage | ESMC Layer | Cosine Similarity | CKA |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- |
 | Stage 1 | 9 | 0.953 | 0.850 |
 | Stage 2 | 19 | 0.964 | 0.617 |
 | Stage 3 | 28 | 0.803 | 0.782 |
@@ -101,7 +101,7 @@ Here are the cosine similarity and centered kernel alignment (CKA) scores that c
 ### ProtHash V1 960
 
 | Stage | ESMC Layer | Cosine Similarity | CKA |
-| --- | --- | --- | --- | --- |
+| --- | --- | --- | --- |
 | Stage 1 | 8 | 0.926 | 0.798 |
 | Stage 2 | 16 | 0.981 | 0.699 |
 | Stage 3 | 23 | 0.833 | 0.629 |
