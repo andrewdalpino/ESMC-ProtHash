@@ -23,19 +23,6 @@ These model weights can be loaded using the `prothash` library using the `from_p
 | [andrewdalpino/ESMC-ProtHash-V1-1152](https://huggingface.co/andrewdalpino/ESMC-ProtHash-V1-1552) | 2048 | 1152 | 768 | 12 | 16 | 117M | 1.x |
 | [andrewdalpino/ESMC-ProtHash-V1-960](https://huggingface.co/andrewdalpino/ESMC-ProtHash-V1-960) | 2048 | 960 | 512 | 8 | 12 | 43M | 1.x |
 
-**Note:** V1 models are trained on the UniRef50 dataset to match the complete contextual embedding space.
-
-### Legacy Models
-
-| Name | Context Length | Embedding Dimensions | Attention Heads (Q/KV) | Encoder Layers | Total Params | Teacher Model | Teacher Dimensions | Library Version |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| [andrewdalpino/ProtHash-V0-384-Tiny](https://huggingface.co/andrewdalpino/ProtHash-V0-384-Tiny) | 2048 | 384 | 16/4 | 4 | 4.2M | esmc_300m | 960 | 0.2.x |
-| [andrewdalpino/ProtHash-V0-384](https://huggingface.co/andrewdalpino/ProtHash-V0-384) | 2048 | 384 | 16/4 | 10 | 10M | esmc_300m | 960 | 0.2.x |
-| [andrewdalpino/ProtHash-V0-512-Tiny](https://huggingface.co/andrewdalpino/ProtHash-V0-512-Tiny) | 2048 | 512 | 16/4 | 4 | 7.4M | esmc_600m | 1152 | 0.2.x |
-| [andrewdalpino/ProtHash-V0-512](https://huggingface.co/andrewdalpino/ProtHash-V0-512) | 2048 | 512 | 16/4 | 10 | 18M | esmc_600m | 1152 | 0.2.x |
-
-**Note:** The V0 models were trained on the SwissProt dataset and only trained to match the embedding space of the classification token.
-
 ## Code Repository
 
 Source code for training and inference can be found at [https://github.com/andrewdalpino/ESMC-ProtHash](https://github.com/andrewdalpino/ESMC-ProtHash).
