@@ -6,7 +6,7 @@ A fast protein language model that outputs contextual embeddings that align in v
 
 ## Key Features
 
-- **Blazing fast and efficient**: ProtHash captures up to 96% of the directional structure of ESMC embeddings while using only 12% of the total parameters - making it suitable for very high-throughput screening of protein sequences.
+- **Blazing fast and efficient**: ProtHash captures up to 98% of the directional structure of ESMC embeddings while using only 12% of the total parameters - making it suitable for very high-throughput screening of protein sequences.
 
 - **Biologically-relevant**: Biologically similar proteins will show up nearby in the embedding space enabling downstream tasks such as clustering, classification, and locality-sensitive hashing.
 
@@ -85,9 +85,31 @@ print(embeddings.stage3)
 print(embeddings.stage4)
 ```
 
+## Evaluations
+
+Here are the cosine similarity and centered kernel alignment (CKA) scores that correspond to the ESMC ground-truth from the validation set.
+
+### ProtHash V1 1152
+
+| Stage | ESMC Layer | Cosine Similarity | CKA |
+| --- | --- | --- | --- | --- |
+| Stage 1 | 9 | 0.953 | 0.850 |
+| Stage 2 | 19 | 0.964 | 0.617 |
+| Stage 3 | 28 | 0.803 | 0.782 |
+| Stage 4 | 36 | 0.804 | 0.712 |
+
+### ProtHash V1 960
+
+| Stage | ESMC Layer | Cosine Similarity | CKA |
+| --- | --- | --- | --- | --- |
+| Stage 1 | 8 | 0.926 | 0.798 |
+| Stage 2 | 16 | 0.981 | 0.699 |
+| Stage 3 | 23 | 0.833 | 0.629 |
+| Stage 4 | 30 | 0.737 | 0.691 |
+
 ## Comparisons
 
-The following chart shows the distribution of stage 4 (last layer) embedding vectors between ProtHash and ESMC. The obtain the coordinates, the combined embedding spaces are first reduced to 128 dimensions using PCA and then reduced again to 2 dimensions using TSNE.
+The following chart shows the distribution of stage 4/final layer embedding vectors between ProtHash V1 1152 and ESMC 600m. The obtain the coordinates, the combined embedding spaces are first reduced to 128 dimensions using PCA and then reduced again to 2 dimensions using TSNE.
 
 ![ProtHash ESMC Stage 4 Comparison](https://raw.githubusercontent.com/andrewdalpino/ProtHash/master/docs/images/stage4_comparison.png)
 
