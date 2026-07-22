@@ -6,7 +6,7 @@ A fast protein language model that outputs contextual embeddings that align in v
 
 ## Key Features
 
-- **Blazing fast and efficient**: ProtHash matching up to 98% of the ESMC embedding space while using only 12% of the total parameters - making it suitable for very high-throughput screening of protein sequences.
+- **Blazing fast and efficient**: ProtHash captures up to 96% of the directional structure of ESMC embeddings while using only 12% of the total parameters - making it suitable for very high-throughput screening of protein sequences.
 
 - **Biologically-relevant**: Biologically similar proteins will show up nearby in the embedding space enabling downstream tasks such as clustering, classification, and locality-sensitive hashing.
 
@@ -84,6 +84,12 @@ print(embeddings.stage2)
 print(embeddings.stage3)
 print(embeddings.stage4)
 ```
+
+## Comparisons
+
+The following chart shows the distribution of stage 4 (last layer) embedding vectors between ProtHash and ESMC. The obtain the coordinates, the combined embedding spaces are first reduced to 128 dimensions using PCA and then reduced again to 2 dimensions using TSNE.
+
+![ProtHash ESMC Stage 4 Comparison](https://raw.githubusercontent.com/andrewdalpino/ProtHash/master/docs/images/stage4_comparison.png)
 
 ## References
 
